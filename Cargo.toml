@@ -1,0 +1,37 @@
+[package]
+name = "oceansentinel"
+version = "0.1.0"
+edition = "2021"
+description = "Live maritime domain awareness: AIS + sonar + LiDAR sensor fusion with Global Fishing Watch enrichment and an OSIRIS-style live map"
+authors = ["OceanSentinel"]
+license = "MIT"
+
+[[bin]]
+name = "oceansentinel"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+rust-embed = "8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json", "gzip"] }
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+toml = "0.8"
+dotenvy = "0.15"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+# native-tls (schannel) to match reqwest and avoid OpenSSL/ring build deps on the GNU toolchain
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"

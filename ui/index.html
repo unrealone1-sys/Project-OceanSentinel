@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OceanSentinel — Live Maritime Domain Awareness</title>
+<link rel="stylesheet" href="/vendor/maplibre-gl.css" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand"><span class="radar"></span> OCEANSENTINEL <span class="ver" id="ver"></span></div>
+    <div class="chips">
+      <span class="chip" id="chip-ws">WS CONNECTING</span>
+      <span class="chip" id="chip-mode">MODE ?</span>
+      <span class="chip" id="chip-gfw">GFW ?</span>
+    </div>
+    <div class="clock" id="clock">--:--:--Z</div>
+  </header>
+
+  <aside id="sidebar">
+    <nav class="tabs">
+      <button class="tab active" data-tab="tracks">TRACKS</button>
+      <button class="tab" data-tab="alerts">ALERTS <span class="badge" id="alert-badge">0</span></button>
+      <button class="tab" data-tab="layers">LAYERS</button>
+      <button class="tab" data-tab="gfw">GFW</button>
+    </nav>
+
+    <section class="panel active" id="panel-tracks">
+      <input id="search" placeholder="search name, MMSI, class…" autocomplete="off" />
+      <div class="filters" id="filters"></div>
+      <div class="list-head">
+        <span id="track-count">0 tracks</span>
+        <button class="btn tiny ghost" id="export-geojson">EXPORT</button>
+      </div>
+      <div class="list" id="track-list"></div>
+    </section>
+
+    <section class="panel" id="panel-alerts">
+      <div class="list-head">
+        <span>Live alert feed</span>
+        <button class="btn tiny ghost" id="clear-alerts">CLEAR</button>
+      </div>
+      <div class="list" id="alert-list"></div>
+    </section>
+
+    <section class="panel" id="panel-layers">
+      <div class="field-group">
+        <div class="group-title">BASEMAP</div>
+        <div class="filters" id="basemap-row"></div>
+      </div>
+      <div class="field-group">
+        <div class="group-title">SOURCES</div>
+        <label class="check"><input type="checkbox" data-filter="ais" checked /> AIS (radio)</label>
+        <label class="check"><input type="checkbox" data-filter="sonar" checked /> Sonar / radar targets</label>
+        <label class="check"><input type="checkbox" data-filter="lidar" checked /> LiDAR contacts</label>
+        <label class="check"><input type="checkbox" data-filter="dark" checked /> Dark contacts (no AIS)</label>
+      </div>
+      <div class="field-group">
+        <div class="group-title">MAP LAYERS</div>
+        <label class="check"><input type="checkbox" data-layer="tracks" checked /> Vessel icons</label>
+        <label class="check"><input type="checkbox" data-layer="labels" checked /> Vessel labels</label>
+        <label class="check"><input type="checkbox" data-layer="trails" checked /> Track history trails</label>
+        <label class="check"><input type="checkbox" data-layer="own" checked /> Own ship</label>
+        <label class="check"><input type="checkbox" data-layer="zones" checked /> Geofence zones</label>
+        <label class="check"><input type="checkbox" data-layer="gfw" checked /> GFW fishing events</label>
+      </div>
+      <div class="field-group">
+        <div class="group-title">GEOFENCE</div>
+        <button class="btn" id="draw-zone">DRAW ZONE</button>
+        <button class="btn ghost" id="clear-zones">CLEAR ALL ZONES</button>
+        <div id="zone-list" class="mini-list"></div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-gfw">
+      <p class="hint" id="gfw-hint"></p>
+      <div class="field-group">
+        <div class="group-title">REGION QUERY</div>
+        <button class="btn" id="gfw-query">FISHING EVENTS IN VIEW (14d)</button>
+        <button class="btn" id="gfw-query-global">GLOBAL FISHING EVENTS (7d)</button>
+        <button class="btn ghost" id="gfw-clear">CLEAR EVENTS</button>
+        <div id="gfw-status" class="hint">Click a fishing-event dot on the map to pull that vessel's GFW record.</div>
+      </div>
+      <div class="field-group">
+        <div class="group-title">VESSEL LOOKUP</div>
+        <input id="gfw-lookup" placeholder="MMSI / IMO / name" autocomplete="off" />
+        <button class="btn" id="gfw-lookup-btn">LOOK UP VESSEL</button>
+      </div>
+    </section>
+  </aside>
+
+  <main id="map"></main>
+
+  <div id="legend">
+    <div><i style="background:#22d3ee"></i> AIS</div>
+    <div><i style="background:#fb923c"></i> Sonar/radar</div>
+    <div><i style="background:#4ade80"></i> LiDAR</div>
+    <div><i style="background:#f8fafc"></i> AIS + sensor</div>
+    <div><i style="background:#ef4444"></i> Dark contact</div>
+  </div>
+  <div id="cursor-readout">—</div>
+  <div id="banner" class="hidden"></div>
+
+  <aside id="drawer" class="hidden">
+    <button id="drawer-close" title="close">✕</button>
+    <div id="drawer-body"></div>
+  </aside>
+
+  <footer id="statusbar">
+    <div id="feeds">no feeds</div>
+    <div id="stats">—</div>
+  </footer>
+</div>
+
+<script src="/vendor/maplibre-gl.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,79 @@
+# OceanSentinel configuration
+# Copy to config.toml and edit. Every section is optional.
+# Secrets: put GFW_API_TOKEN in a .env file or the environment, never here.
+
+[server]
+host = "127.0.0.1"
+port = 8787
+open_browser = true
+
+# Area of interest = where the map opens (and where the demo traffic appears)
+[aoi]
+name = "Strait of Gibraltar"
+center_lat = 36.02
+center_lon = -5.36
+zoom = 9.0
+
+# Built-in traffic generator so the app is useful with zero hardware.
+# Turn off once you attach real feeds.
+[simulation]
+enabled = true
+vessels = 14          # AIS-transmitting targets
+dark_vessels = 5      # no-AIS targets (detected only by sonar/lidar -> dark contact alerts)
+interval_ms = 1000
+sonar_range_km = 16.0
+lidar_range_km = 4.0
+
+[fusion]
+gate_m = 900.0             # association gate: sensor contact within this range joins a track
+dark_alert_after_s = 25    # sensor-only track age before a "dark contact" alert is raised
+ais_lost_after_s = 180     # AIS track silent this long -> "AIS lost" alert
+stale_after_s = 120        # UI greys out tracks not seen for this long
+drop_after_s = 1800        # forget tracks not seen for this long
+alert_cooldown_s = 600     # minimum seconds between repeated alerts for the same track
+trail_points = 400         # trail history kept per track
+snapshot_trail = 90        # trail points streamed to the map per update
+tick_ms = 1000             # fusion/telemetry tick
+max_tracks = 2500          # hard cap for global feeds (least recently seen evicted)
+
+# --- Live feeds -------------------------------------------------------------
+# AIS: best fed by an RTL-SDR running AIS-catcher (free, open source):
+#   AIS-catcher -d 0 -o 5 127.0.0.1 10110        # raw NMEA over TCP
+#   AIS-catcher -d 0 -o 3 127.0.0.1 10111        # raw NMEA over UDP
+# Both raw NMEA (!AIVDM) and AIS-catcher JSON lines are accepted.
+[sources.ais]
+enabled = false
+tcp = ["127.0.0.1:10110"]
+udp = []
+
+# Sonar / radar / ARPA target trackers: NMEA 0183 TLL (target lat/lon) and
+# TTM (target range/bearing relative to own ship) sentences.
+# Talkers: SD/SN = sonar, RA = radar/ARPA, LI = lidar tracker.
+[sources.sonar]
+enabled = false
+udp = ["0.0.0.0:10112"]
+tcp = []
+talkers = ["SD", "SN", "RA", "LI"]
+
+# Marine LiDAR: contact-level JSON lines over UDP (schema in README).
+[sources.lidar]
+enabled = false
+udp = ["0.0.0.0:10113"]
+tcp = []
+talkers = ["LI"]
+
+# Global live AIS over the internet, via AISStream.io (free API key:
+# https://aisstream.io). Put AISSTREAM_API_KEY in .env. Defaults to the whole
+# globe — narrow the boxes to cut message volume: [[[south, west], [north, east]]].
+[sources.aisstream]
+enabled = false
+url = "wss://stream.aisstream.io/v0/stream"
+bounding_boxes = [[[-90.0, -180.0], [90.0, 180.0]]]
+
+[gfw]
+# Global Fishing Watch enrichment. Get a free token at
+# https://globalfishingwatch.org/our-apis/tokens (non-commercial use).
+# Then set GFW_API_TOKEN in the environment or .env.
+enabled = true
+base_url = "https://gateway.api.globalfishingwatch.org"
+cache_ttl_s = 21600
