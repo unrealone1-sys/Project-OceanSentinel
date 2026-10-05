@@ -261,8 +261,10 @@ drawer. Without a token everything else still works.
 * **Vessels glide** between AIS reports (dead-reckoned along course and speed,
   capped at 45 s so stale tracks stop instead of flying).
 * **Class-shaped icons** — fishing, cargo/tanker, passenger/patrol silhouettes,
-  tinted by source — plus a basemap switcher (Satellite / Dark / Streets) and an
-  always-on lat/lon graticule.
+  tinted by source — plus an always-on lat/lon graticule.
+* **Seven basemap styles** in the LAYERS tab: **Satellite** (default), **Ocean**
+  (bathymetry — best near coasts), **Dark**, **Topo**, **Streets**, **Nat Geo**
+  and **Relief**. All keyless; the choice is remembered between sessions.
 * **Live tracks** — triangle icons rotate with heading/course, coloured by
   source: cyan = AIS, orange = sonar/radar, green = LiDAR, white = AIS
   confirmed by a physical sensor, pulsing red = dark contact (no AIS).

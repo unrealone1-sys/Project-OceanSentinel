@@ -135,6 +135,45 @@ const BASEMAPS = {
     attribution: '© OpenStreetMap contributors',
     paint: { 'raster-opacity': 0.85 },
   },
+  ocean: {
+    label: 'OCEAN',
+    // bathymetry and ocean-place names — the natural style for a maritime tool.
+    // Esri only has survey data near coasts and at low zooms; open-sea tiles
+    // read "Map data not yet available".
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
+    ],
+    tileSize: 256,
+    attribution: 'Esri Ocean Basemap',
+    paint: { 'raster-opacity': 0.92 },
+  },
+  topo: {
+    label: 'TOPO',
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
+    ],
+    tileSize: 256,
+    attribution: 'Esri World Topo Map',
+    paint: { 'raster-opacity': 0.9 },
+  },
+  natgeo: {
+    label: 'NAT GEO',
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}',
+    ],
+    tileSize: 256,
+    attribution: 'Esri National Geographic',
+    paint: { 'raster-opacity': 0.9 },
+  },
+  relief: {
+    label: 'RELIEF',
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
+    ],
+    tileSize: 256,
+    attribution: 'Esri Shaded Relief',
+    paint: { 'raster-opacity': 0.9 },
+  },
 };
 
 let activeBasemap = (() => {
