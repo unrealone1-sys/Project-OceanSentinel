@@ -118,10 +118,15 @@ const BASEMAPS = {
   },
   dark: {
     label: 'DARK',
-    tiles: ['a', 'b', 'c', 'd'].map((s) => `https://${s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png`),
+    // Esri World Dark Gray Canvas: keyless and no rate-limit warnings. CARTO's
+    // dark tiles now throttle unauthenticated browsers with "API KEY REQUIRED"
+    // placeholder images.
+    tiles: [
+      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+    ],
     tileSize: 256,
-    attribution: '© OpenStreetMap contributors © CARTO',
-    paint: { 'raster-opacity': 0.95, 'raster-brightness-max': 1.0 },
+    attribution: 'Esri Dark Gray Canvas',
+    paint: { 'raster-opacity': 0.95 },
   },
   streets: {
     label: 'STREETS',
