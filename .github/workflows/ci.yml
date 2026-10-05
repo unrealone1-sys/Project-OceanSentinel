@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lints
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --all-targets
+
+  # The UI is embedded in the binary, so a missing/garbled asset only shows up
+  # at runtime. This catches the obvious cases early.
+  assets:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Embedded UI assets present
+        shell: bash
+        run: |
+          set -e
+          for f in ui/index.html ui/app.js ui/style.css ui/vendor/maplibre-gl.js assets/land-50m.geojson; do
+            test -s "$f" || { echo "missing or empty: $f"; exit 1; }
+          done
+          node --check ui/app.js
+          echo "ui assets ok"

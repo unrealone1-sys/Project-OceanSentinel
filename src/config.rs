@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Config {
     pub server: ServerCfg,
     pub aoi: AoiCfg,
@@ -12,19 +13,9 @@ pub struct Config {
     pub sources: SourcesCfg,
     pub gfw: GfwCfg,
     pub fusion: FusionCfg,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            server: ServerCfg::default(),
-            aoi: AoiCfg::default(),
-            simulation: SimCfg::default(),
-            sources: SourcesCfg::default(),
-            gfw: GfwCfg::default(),
-            fusion: FusionCfg::default(),
-        }
-    }
+    pub storage: StorageCfg,
+    pub alerts: AlertsCfg,
+    pub watchlist: WatchlistCfg,
 }
 
 impl Config {
@@ -34,10 +25,10 @@ impl Config {
             std::fs::write(path, include_str!("../config.example.toml"))
                 .with_context(|| format!("writing default config to {}", path.display()))?;
         }
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let cfg: Config = toml::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+        let cfg: Config =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
         Ok(cfg)
     }
 
@@ -48,6 +39,23 @@ impl Config {
         sim: Option<bool>,
         aoi: Option<&str>,
     ) {
+        // Precedence: config file < environment < explicit CLI arguments.
+        // (The CLI used to lose to a stale OS_PORT in .env, which silently
+        // ignored --port; environment values are applied first now.)
+        if let Ok(v) = std::env::var("OS_PORT") {
+            if let Ok(p) = v.parse() {
+                self.server.port = p;
+            }
+        }
+        if let Ok(v) = std::env::var("OS_HOST") {
+            if !v.is_empty() {
+                self.server.host = v;
+            }
+        }
+        if let Ok(v) = std::env::var("OS_SIM") {
+            let on = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
+            self.simulation.enabled = on;
+        }
         if let Some(p) = port {
             self.server.port = p;
         }
@@ -67,20 +75,6 @@ impl Config {
                 self.aoi.center_lon = parts[1];
             }
         }
-        if let Ok(v) = std::env::var("OS_PORT") {
-            if let Ok(p) = v.parse() {
-                self.server.port = p;
-            }
-        }
-        if let Ok(v) = std::env::var("OS_HOST") {
-            if !v.is_empty() {
-                self.server.host = v;
-            }
-        }
-        if let Ok(v) = std::env::var("OS_SIM") {
-            let on = matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on");
-            self.simulation.enabled = on;
-        }
         if let Ok(tok) = std::env::var("GFW_API_TOKEN") {
             if !tok.trim().is_empty() {
                 self.gfw.token = Some(tok.trim().to_string());
@@ -91,7 +85,94 @@ impl Config {
                 self.sources.aisstream.api_key = Some(tok.trim().to_string());
             }
         }
+        if let Ok(tok) = std::env::var("OS_API_TOKEN") {
+            if !tok.trim().is_empty() {
+                self.server.api_token = Some(tok.trim().to_string());
+            }
+        }
+        if let Ok(url) = std::env::var("OS_ALERT_WEBHOOK") {
+            if !url.trim().is_empty() {
+                self.alerts.webhooks.push(url.trim().to_string());
+            }
+        }
+        if let Ok(tok) = std::env::var("OS_TELEGRAM_BOT_TOKEN") {
+            if !tok.trim().is_empty() {
+                self.alerts.telegram_bot_token = Some(tok.trim().to_string());
+            }
+        }
+        if let Ok(chat) = std::env::var("OS_TELEGRAM_CHAT_ID") {
+            if !chat.trim().is_empty() {
+                self.alerts.telegram_chat_id = Some(chat.trim().to_string());
+            }
+        }
     }
+}
+
+/// Where persistent state lives (zones, watchlist, alert log, track history).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct StorageCfg {
+    pub dir: String,
+    /// Record vessel positions periodically so the map can be replayed.
+    /// Costs disk: roughly (vessels x 130 bytes) per interval.
+    pub record_tracks: bool,
+    pub record_interval_s: u64,
+    pub retention_days: u32,
+}
+
+impl Default for StorageCfg {
+    fn default() -> Self {
+        StorageCfg {
+            dir: "data".to_string(),
+            record_tracks: false,
+            record_interval_s: 300,
+            retention_days: 3,
+        }
+    }
+}
+
+/// Out-of-band alert delivery. Empty = alerts stay in the UI only.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct AlertsCfg {
+    /// Generic JSON webhooks: POSTs {text, content, alert}. Works with Slack,
+    /// Discord, Teams and automation platforms (Zapier/n8n/Make) as-is.
+    pub webhooks: Vec<String>,
+    pub telegram_bot_token: Option<String>,
+    pub telegram_chat_id: Option<String>,
+    /// Lowest severity forwarded: info | medium | high
+    pub min_severity: String,
+    pub max_per_minute: u32,
+}
+
+impl Default for AlertsCfg {
+    fn default() -> Self {
+        AlertsCfg {
+            webhooks: Vec::new(),
+            telegram_bot_token: None,
+            telegram_chat_id: None,
+            min_severity: "medium".to_string(),
+            max_per_minute: 30,
+        }
+    }
+}
+
+impl AlertsCfg {
+    pub fn destinations(&self) -> Vec<String> {
+        let mut out: Vec<String> = self.webhooks.clone();
+        if self.telegram_bot_token.is_some() && self.telegram_chat_id.is_some() {
+            out.push("telegram".to_string());
+        }
+        out
+    }
+}
+
+/// Watchlist entries may live in config and/or be added from the UI (the UI
+/// copy is persisted to `storage.dir/watchlist.json`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct WatchlistCfg {
+    pub entries: Vec<crate::model::WatchEntry>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +181,10 @@ pub struct ServerCfg {
     pub host: String,
     pub port: u16,
     pub open_browser: bool,
+    /// When set, every API and WebSocket request must present it
+    /// (Authorization: Bearer <token>, or ?token= for the WebSocket).
+    /// Required before binding to a non-loopback host.
+    pub api_token: Option<String>,
 }
 
 impl Default for ServerCfg {
@@ -108,6 +193,7 @@ impl Default for ServerCfg {
             host: "127.0.0.1".to_string(),
             port: 8787,
             open_browser: true,
+            api_token: None,
         }
     }
 }
@@ -233,6 +319,12 @@ pub struct FusionCfg {
     /// Hard cap on live tracks; a global AIS subscription can carry tens of
     /// thousands of vessels, so the least recently seen are evicted.
     pub max_tracks: usize,
+    /// Raise a collision-risk alert when a TTM target reports a closest point
+    /// of approach inside these limits.
+    pub collision_cpa_m: f64,
+    pub collision_tcpa_min: f64,
+    /// Alert when a connected feed goes quiet for this many seconds.
+    pub feed_stall_after_s: i64,
 }
 
 impl Default for FusionCfg {
@@ -248,6 +340,9 @@ impl Default for FusionCfg {
             snapshot_trail: 90,
             tick_ms: 1000,
             max_tracks: 2500,
+            collision_cpa_m: 500.0,
+            collision_tcpa_min: 10.0,
+            feed_stall_after_s: 90,
         }
     }
 }

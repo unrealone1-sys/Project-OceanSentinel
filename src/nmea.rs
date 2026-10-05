@@ -237,6 +237,9 @@ pub struct Ttm {
     pub speed_kn: Option<f64>,
     pub course_deg: Option<f64>,
     pub name: Option<String>,
+    /// Closest point of approach (metres) and time to it (minutes).
+    pub cpa_m: Option<f64>,
+    pub tcpa_min: Option<f64>,
 }
 
 pub fn parse_ttm(s: &Sentence) -> Option<Ttm> {
@@ -248,11 +251,12 @@ pub fn parse_ttm(s: &Sentence) -> Option<Ttm> {
         .get(9)
         .map(|v| v.to_ascii_uppercase())
         .unwrap_or_default();
-    let dist_m = match units.as_str() {
-        "K" | "KM" => raw_dist * 1000.0,
-        "S" | "SM" => raw_dist * 1609.344,
-        _ => raw_dist * 1852.0, // NMEA default: nautical miles
+    let per_unit_m = match units.as_str() {
+        "K" | "KM" => 1000.0,
+        "S" | "SM" => 1609.344,
+        _ => 1852.0, // NMEA default: nautical miles
     };
+    let dist_m = raw_dist * per_unit_m;
     let bearing_deg = f(&s.fields, 2)?;
     let true_bearing = s
         .fields
@@ -266,6 +270,11 @@ pub fn parse_ttm(s: &Sentence) -> Option<Ttm> {
         .cloned()
         .or_else(|| s.fields.first().filter(|v| !v.is_empty()).cloned())
         .unwrap_or_else(|| "TGT".to_string());
+    // Negative or unavailable CPA/TCPA values mean "not computed" — drop them.
+    let cpa_m = f(&s.fields, 7)
+        .filter(|v| *v >= 0.0)
+        .map(|v| v * per_unit_m);
+    let tcpa_min = f(&s.fields, 8).filter(|v| *v >= 0.0);
     Some(Ttm {
         target,
         dist_m,
@@ -274,6 +283,8 @@ pub fn parse_ttm(s: &Sentence) -> Option<Ttm> {
         speed_kn: f(&s.fields, 4),
         course_deg: f(&s.fields, 5),
         name: s.fields.get(10).filter(|v| !v.is_empty()).cloned(),
+        cpa_m,
+        tcpa_min,
     })
 }
 
@@ -303,17 +314,34 @@ mod tests {
 
     #[test]
     fn parses_ttm_in_nautical_miles() {
-        let s = parse("$SDTTM,03,2.50,45.0,T,12.0,90.0,T,1.2,3.4,N,SIM-03,120000.00,T,*3E").unwrap();
+        let s =
+            parse("$SDTTM,03,2.50,45.0,T,12.0,90.0,T,1.2,3.4,N,SIM-03,120000.00,T,*3E").unwrap();
         let t = parse_ttm(&s).unwrap();
         assert!((t.dist_m - 4630.0).abs() < 1.0, "dist {}", t.dist_m);
         assert!(t.true_bearing);
         assert_eq!(t.target, "SIM-03");
+        assert!((t.cpa_m.unwrap() - 2222.4).abs() < 1.0, "cpa {:?}", t.cpa_m);
+        assert!(
+            (t.tcpa_min.unwrap() - 3.4).abs() < 0.01,
+            "tcpa {:?}",
+            t.tcpa_min
+        );
+    }
+
+    #[test]
+    fn ttm_unavailable_cpa_is_dropped() {
+        // 4294967295-style sentinels and negatives mean "not computed"
+        let s = parse("$SDTTM,04,2.50,45.0,T,12.0,90.0,T,-1.0,-1.0,N,NA,120000.00,T,*00").unwrap();
+        let t = parse_ttm(&s).unwrap();
+        assert!(t.cpa_m.is_none(), "negative CPA must be ignored");
+        assert!(t.tcpa_min.is_none(), "negative TCPA must be ignored");
     }
 
     #[test]
     fn own_ship_from_rmc() {
         let mut o = OwnShipState::default();
-        let s = parse("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A").unwrap();
+        let s =
+            parse("$GPRMC,123519,A,4807.038,N,01131.000,E,022.4,084.4,230394,003.1,W*6A").unwrap();
         assert!(o.update(&s, Utc::now()));
         assert!((o.sog.unwrap() - 22.4).abs() < 0.01);
         assert!(o.lat.is_some());

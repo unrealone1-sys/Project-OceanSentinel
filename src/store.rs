@@ -18,6 +18,9 @@ pub struct SnapshotMeta {
     pub gfw_token: bool,
     pub simulation: bool,
     pub port: u16,
+    pub recording: bool,
+    pub alert_destinations: Vec<String>,
+    pub auth_required: bool,
 }
 
 pub struct Store {
@@ -25,6 +28,7 @@ pub struct Store {
     pub mmsi_index: HashMap<u32, String>,
     pub alerts: VecDeque<Alert>,
     pub zones: Vec<Zone>,
+    pub watchlist: Vec<WatchEntry>,
     pub feeds: HashMap<String, FeedStatus>,
     pub own_ship: Option<OwnShipFix>,
     pub gfw_events: Vec<GfwEvent>,
@@ -33,15 +37,21 @@ pub struct Store {
     pub alert_cap: usize,
     pub total_alerts: u64,
     pub dark_alerts: u64,
+    pub paths: crate::persist::Paths,
 }
 
 impl Store {
-    pub fn new(cfg: &FusionCfg) -> Self {
-        Store {
+    pub fn new(
+        cfg: &FusionCfg,
+        paths: crate::persist::Paths,
+        watch_from_config: Vec<WatchEntry>,
+    ) -> Self {
+        let mut store = Store {
             tracks: HashMap::new(),
             mmsi_index: HashMap::new(),
             alerts: VecDeque::new(),
             zones: Vec::new(),
+            watchlist: watch_from_config,
             feeds: HashMap::new(),
             own_ship: None,
             gfw_events: Vec::new(),
@@ -50,6 +60,61 @@ impl Store {
             alert_cap: 500,
             total_alerts: 0,
             dark_alerts: 0,
+            paths,
+        };
+        // reload anything saved by a previous run
+        if let Some(zones) = crate::persist::load_json::<Vec<Zone>>(&store.paths.zones()) {
+            if !zones.is_empty() {
+                tracing::info!("restored {} saved geofence zones", zones.len());
+            }
+            store.zones = zones;
+        }
+        if let Some(saved) = crate::persist::load_json::<Vec<WatchEntry>>(&store.paths.watchlist())
+        {
+            for e in saved {
+                if !store.watchlist.iter().any(|w| w.id == e.id) {
+                    store.watchlist.push(e);
+                }
+            }
+            tracing::info!("watchlist holds {} entries", store.watchlist.len());
+        }
+        // entries declared in config.toml may omit the id
+        for e in store.watchlist.iter_mut() {
+            if e.id.trim().is_empty() {
+                e.id = format!(
+                    "cfg-{}",
+                    e.mmsi
+                        .map(|m| m.to_string())
+                        .or_else(|| e.imo.map(|i| format!("imo{i}")))
+                        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()[..8].to_string())
+                );
+            }
+        }
+        // restore the tail of the alert log so the feed is not empty after a
+        // restart (the full history stays on disk in alerts.jsonl)
+        let lines = crate::persist::load_lines(&store.paths.alerts());
+        let tail = lines.len().saturating_sub(120);
+        for line in &lines[tail..] {
+            if let Ok(a) = serde_json::from_str::<Alert>(line) {
+                store.alerts.push_back(a);
+                store.total_alerts += 1;
+            }
+        }
+        if !store.alerts.is_empty() {
+            tracing::info!("restored {} recent alerts from the log", store.alerts.len());
+        }
+        store
+    }
+
+    pub fn save_zones(&self) {
+        if let Err(e) = crate::persist::save_json(&self.paths.zones(), &self.zones) {
+            tracing::warn!("could not persist zones: {e}");
+        }
+    }
+
+    pub fn save_watchlist(&self) {
+        if let Err(e) = crate::persist::save_json(&self.paths.watchlist(), &self.watchlist) {
+            tracing::warn!("could not persist watchlist: {e}");
         }
     }
 
@@ -96,7 +161,14 @@ impl Store {
     /// Resolve (or create) the track that an AIS MMSI belongs to. If a
     /// sensor-only track already exists near the first known position, the
     /// identity is attached to it: that is the sonar/lidar <-> AIS fusion.
-    pub fn ensure_mmsi_track(&mut self, mmsi: u32, lat: f64, lon: f64, ts: DateTime<Utc>, gate_m: f64) -> String {
+    pub fn ensure_mmsi_track(
+        &mut self,
+        mmsi: u32,
+        lat: f64,
+        lon: f64,
+        ts: DateTime<Utc>,
+        gate_m: f64,
+    ) -> String {
         if let Some(id) = self.mmsi_index.get(&mmsi) {
             if self.tracks.contains_key(id) {
                 return id.clone();
@@ -126,17 +198,12 @@ impl Store {
         *seq += 1;
         let short = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let id = format!("sensor:{short}");
+        // sensor labels often carry a type prefix (F/V, MV, MT, TUG...), which
+        // gives sensor-only contacts a meaningful icon
         let classification = c
             .label
             .as_deref()
-            .map(|l| l.to_ascii_lowercase())
-            .map(|l| {
-                if l.contains("dark") || l.contains("unknown") {
-                    "unknown"
-                } else {
-                    "unknown"
-                }
-            })
+            .map(classify_from_label)
             .unwrap_or("unknown");
         self.tracks
             .insert(id.clone(), Track::new_sensor(id.clone(), c, classification));
@@ -300,6 +367,7 @@ impl Store {
             "tracks": tracks,
             "alerts": alerts,
             "zones": self.zones,
+            "watchlist": self.watchlist,
             "feeds": feeds,
             "gfw_events": self.gfw_events,
             "stats": {
@@ -310,6 +378,7 @@ impl Store {
                 "corroborated": corroborated,
                 "alerts": self.total_alerts,
                 "dark_alerts": self.dark_alerts,
+                "watchlist": self.watchlist.len(),
                 "uptime_s": (now - self.started).num_seconds(),
             },
             "app": {
@@ -319,6 +388,9 @@ impl Store {
                 "gfw_token": meta.gfw_token,
                 "simulation": meta.simulation,
                 "port": meta.port,
+                "recording": meta.recording,
+                "alert_destinations": meta.alert_destinations,
+                "auth_required": meta.auth_required,
             }
         })
     }

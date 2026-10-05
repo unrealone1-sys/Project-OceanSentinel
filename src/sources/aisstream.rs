@@ -28,7 +28,8 @@ pub fn spawn(cfg: AisStreamCfg, tx: EventTx) -> JoinHandle<()> {
                     FEED,
                     "aisstream",
                     "error",
-                    "AISSTREAM_API_KEY is not set — get a free key at https://aisstream.io".to_string(),
+                    "AISSTREAM_API_KEY is not set — get a free key at https://aisstream.io"
+                        .to_string(),
                     0,
                     0.0,
                 )));
@@ -84,7 +85,7 @@ async fn run_session(cfg: &AisStreamCfg, key: &str, tx: &EventTx, total: &mut u6
         "BoundingBoxes": boxes,
         "FilterMessageTypes": ["PositionReport", "ShipStaticData", "StaticDataReport"],
     });
-    sink.send(Message::Text(sub.to_string().into()))
+    sink.send(Message::Text(sub.to_string()))
         .await
         .context("sending AISStream subscription")?;
 
@@ -259,7 +260,10 @@ pub fn body_from_aisstream(v: &Value) -> Option<AisBody> {
                         .or_else(|| meta_str("ShipName")),
                 })
             } else {
-                let dim = r.pointer("/ReportB/Dimension").cloned().unwrap_or(Value::Null);
+                let dim = r
+                    .pointer("/ReportB/Dimension")
+                    .cloned()
+                    .unwrap_or(Value::Null);
                 let dim_u16 = |k: &str| dim.get(k).and_then(|x| x.as_u64()).unwrap_or(0) as u16;
                 let (a, b) = (dim_u16("A"), dim_u16("B"));
                 Some(AisBody::StaticB {
@@ -381,7 +385,13 @@ mod tests {
         )
         .unwrap();
         match body_from_aisstream(&part_b).unwrap() {
-            AisBody::StaticB { mmsi, ship_type, length, beam, .. } => {
+            AisBody::StaticB {
+                mmsi,
+                ship_type,
+                length,
+                beam,
+                ..
+            } => {
                 assert_eq!(mmsi, 232012345);
                 assert_eq!(ship_type, Some(36));
                 assert_eq!(length, Some(12));

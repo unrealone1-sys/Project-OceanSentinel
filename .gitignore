@@ -2,3 +2,6 @@
 /config.toml
 /.env
 *.log
+# runtime state: zones, watchlist, alert log, recorded history, rotating logs
+/data/
+/data-verify/

@@ -34,7 +34,50 @@ const state = {
   drawerBusy: false,
   darkMarkers: new Map(),
   sawTileErrors: false,
+  hiddenTracks: 0,
+  watchlist: [],
+  classFilter: '',
+  inViewOnly: false,
+  sortBy: 'dark',
+  history: null,
+  replayTs: null,
+  eventTypes: { FISHING: true, ENCOUNTER: true, LOITERING: true, GAP: true, PORT_VISIT: true },
 };
+
+// --- optional API token (kept in localStorage) -------------------------------
+function apiToken() {
+  try {
+    return localStorage.getItem('os.token') || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+function promptToken() {
+  const t = window.prompt('This OceanSentinel server requires an API token:', apiToken());
+  if (t !== null) {
+    try {
+      localStorage.setItem('os.token', t.trim());
+    } catch (e) {
+      /* ignore */
+    }
+    location.reload();
+  }
+}
+
+/// fetch wrapper that attaches the token and explains a 401.
+async function api(path, opts) {
+  const headers = Object.assign({}, (opts && opts.headers) || {});
+  const t = apiToken();
+  if (t) headers['authorization'] = 'Bearer ' + t;
+  const r = await fetch(path, Object.assign({}, opts || {}, { headers }));
+  if (r.status === 401) {
+    banner('This server requires an API token.', 'warn');
+    promptToken();
+    throw new Error('unauthorized');
+  }
+  return r;
+}
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -180,6 +223,19 @@ function graticuleFC() {
   return { type: 'FeatureCollection', features: feats };
 }
 
+/// Nested match: source colour (style) x vessel class (shape).
+function iconExpr() {
+  const expr = ['match', ['get', 'shape']];
+  for (const shape of SHAPES) {
+    const inner = ['match', ['get', 'style']];
+    for (const style of Object.keys(COLORS)) inner.push(style, `v-${style}-${shape}`);
+    inner.push(`v-ais-${shape}`);
+    expr.push(shape, inner);
+  }
+  expr.push('v-ais-other');
+  return expr;
+}
+
 function updateGraticule() {
   const src = map.getSource('graticule');
   if (src) src.setData(graticuleFC());
@@ -196,17 +252,41 @@ map.on('error', (e) => {
   }
 });
 
-function shipIcon(color, size = 34) {
+const SHAPES = ['fishing', 'cargo', 'passenger', 'other'];
+
+/// Vessel silhouettes by class, tinted by track source, so a trawler and a
+/// tanker read differently at a glance (as on any serious MDA display).
+function shipIcon(color, shape = 'other', size = 34) {
   const c = document.createElement('canvas');
   c.width = size;
   c.height = size;
   const ctx = c.getContext('2d');
   const s = size;
   ctx.beginPath();
-  ctx.moveTo(s / 2, 2.5);
-  ctx.lineTo(s * 0.84, s - 5);
-  ctx.lineTo(s / 2, s * 0.7);
-  ctx.lineTo(s * 0.16, s - 5);
+  if (shape === 'fishing') {
+    ctx.moveTo(s / 2, 2.5);
+    ctx.lineTo(s * 0.66, s - 6);
+    ctx.lineTo(s / 2, s * 0.8);
+    ctx.lineTo(s * 0.34, s - 6);
+  } else if (shape === 'cargo') {
+    ctx.moveTo(s / 2, 2.5);
+    ctx.lineTo(s * 0.74, s * 0.28);
+    ctx.lineTo(s * 0.74, s - 5);
+    ctx.lineTo(s * 0.26, s - 5);
+    ctx.lineTo(s * 0.26, s * 0.28);
+  } else if (shape === 'passenger') {
+    const r = s * 0.22;
+    ctx.moveTo(s / 2, 2.5);
+    ctx.lineTo(s * 0.8, s * 0.35);
+    ctx.quadraticCurveTo(s * 0.8, s - 5, s / 2 + r, s - 5);
+    ctx.lineTo(s / 2 - r, s - 5);
+    ctx.quadraticCurveTo(s * 0.2, s - 5, s * 0.2, s * 0.35);
+  } else {
+    ctx.moveTo(s / 2, 2.5);
+    ctx.lineTo(s * 0.84, s - 5);
+    ctx.lineTo(s / 2, s * 0.7);
+    ctx.lineTo(s * 0.16, s - 5);
+  }
   ctx.closePath();
   ctx.fillStyle = color;
   ctx.fill();
@@ -246,17 +326,26 @@ function ownIcon() {
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
 map.on('load', () => {
-  map.addImage('v-ais', shipIcon(COLORS.ais), { pixelRatio: 2 });
-  map.addImage('v-sonar', shipIcon(COLORS.sonar), { pixelRatio: 2 });
-  map.addImage('v-lidar', shipIcon(COLORS.lidar), { pixelRatio: 2 });
-  map.addImage('v-radar', shipIcon(COLORS.radar), { pixelRatio: 2 });
-  map.addImage('v-fused', shipIcon(COLORS.fused), { pixelRatio: 2 });
-  map.addImage('v-dark', shipIcon(COLORS.dark), { pixelRatio: 2 });
+  for (const style of Object.keys(COLORS)) {
+    for (const shape of SHAPES) {
+      map.addImage(`v-${style}-${shape}`, shipIcon(COLORS[style], shape), { pixelRatio: 2 });
+    }
+  }
   map.addImage('v-own', ownIcon(), { pixelRatio: 2 });
+  map.addImage('v-history', shipIcon('#94a3b8', 'other'), { pixelRatio: 2 });
 
-  for (const id of ['zones', 'gfw', 'trails', 'tracks', 'own', 'draw', 'graticule']) {
+  for (const id of ['zones', 'gfw', 'trails', 'own', 'draw', 'graticule', 'history']) {
     map.addSource(id, { type: 'geojson', data: EMPTY_FC });
   }
+  // tracks are clustered: at low zoom a worldwide feed would otherwise paint
+  // thousands of overlapping icons
+  map.addSource('tracks', {
+    type: 'geojson',
+    data: EMPTY_FC,
+    cluster: true,
+    clusterRadius: 46,
+    clusterMaxZoom: 7,
+  });
 
   // graticule sits directly above the basemap, below all data layers
   map.addLayer({
@@ -315,6 +404,35 @@ map.on('load', () => {
   });
 
   map.addLayer({
+    id: 'clusters',
+    type: 'circle',
+    source: 'tracks',
+    filter: ['has', 'point_count'],
+    paint: {
+      'circle-color': [
+        'step', ['get', 'point_count'],
+        'rgba(34, 211, 238, 0.22)', 25, 'rgba(56, 189, 248, 0.28)', 200, 'rgba(125, 211, 252, 0.32)',
+      ],
+      'circle-radius': ['step', ['get', 'point_count'], 15, 25, 21, 200, 30],
+      'circle-stroke-color': 'rgba(34, 211, 238, 0.75)',
+      'circle-stroke-width': 1,
+    },
+  });
+  map.addLayer({
+    id: 'cluster-count',
+    type: 'symbol',
+    source: 'tracks',
+    filter: ['has', 'point_count'],
+    layout: {
+      'text-field': '{point_count_abbreviated}',
+      'text-font': ['Open Sans Regular'],
+      'text-size': 11,
+      'text-allow-overlap': true,
+    },
+    paint: { 'text-color': '#e6f7fd' },
+  });
+
+  map.addLayer({
     id: 'sel-ring',
     type: 'circle',
     source: 'tracks',
@@ -331,17 +449,9 @@ map.on('load', () => {
     id: 'tracks-icons',
     type: 'symbol',
     source: 'tracks',
+    filter: ['!', ['has', 'point_count']],
     layout: {
-      'icon-image': [
-        'match',
-        ['get', 'style'],
-        'ais', 'v-ais',
-        'sonar', 'v-sonar',
-        'lidar', 'v-lidar',
-        'radar', 'v-radar',
-        'dark', 'v-dark',
-        'v-fused',
-      ],
+      'icon-image': iconExpr(),
       'icon-size': ['interpolate', ['linear'], ['zoom'], 3, 0.42, 8, 0.62, 12, 0.95],
       'icon-rotate': ['coalesce', ['get', 'heading'], 0],
       'icon-rotation-alignment': 'map',
@@ -355,6 +465,7 @@ map.on('load', () => {
     id: 'tracks-labels',
     type: 'symbol',
     source: 'tracks',
+    filter: ['!', ['has', 'point_count']],
     minzoom: 7.2,
     layout: {
       // must match a font that actually exists on the glyph server, otherwise
@@ -366,6 +477,7 @@ map.on('load', () => {
       'text-anchor': 'top',
       'text-optional': true,
       'text-allow-overlap': false,
+      'symbol-sort-key': ['get', 'priority'],
     },
     paint: {
       'text-color': ['case', ['get', 'dark'], '#fca5a5', '#dbe9f7'],
@@ -432,12 +544,29 @@ map.on('mouseenter', 'tracks-icons', () => (map.getCanvas().style.cursor = state
 map.on('mouseleave', 'tracks-icons', () => (map.getCanvas().style.cursor = state.drawing ? 'crosshair' : ''));
 
 // Clicking a GFW fishing-event dot pulls that vessel's registry record.
+map.on('click', 'clusters', (e) => {
+  const f = map.queryRenderedFeatures(e.point, { layers: ['clusters'] })[0];
+  if (!f) return;
+  const src = map.getSource('tracks');
+  src.getClusterExpansionZoom(f.properties.cluster_id).then((zoom) => {
+    map.easeTo({ center: f.geometry.coordinates, zoom: zoom + 0.2 });
+  });
+});
+
 map.on('click', 'gfw-circles', (e) => {
   const p = e.features && e.features[0] && e.features[0].properties;
   if (p && p.ssvid) gfwLookup(String(p.ssvid));
 });
 map.on('mouseenter', 'gfw-circles', () => (map.getCanvas().style.cursor = 'pointer'));
 map.on('mouseleave', 'gfw-circles', () => (map.getCanvas().style.cursor = ''));
+map.on('mouseenter', 'clusters', () => (map.getCanvas().style.cursor = 'pointer'));
+map.on('mouseleave', 'clusters', () => (map.getCanvas().style.cursor = ''));
+
+// keep the server's viewport in step with the map (debounced by moveend)
+map.on('moveend', () => {
+  sendViewport(state.ws);
+  if (state.inViewOnly) renderTrackList();
+});
 
 /* ------------------------------------------------------------ data -> map */
 
@@ -458,16 +587,60 @@ function labelOf(t) {
   return t.id;
 }
 
+/// Vessel class -> icon silhouette.
+function shapeOf(t) {
+  const c = (t.classification || '').toLowerCase();
+  if (c === 'fishing' || c === 'sailing' || c === 'pleasure' || c === 'dredging') return 'fishing';
+  if (c === 'cargo' || c === 'tanker' || c === 'towing' || c === 'highspeed') return 'cargo';
+  if (c === 'passenger' || c === 'patrol' || c === 'sar' || c === 'medical' || c === 'military' || c === 'port' || c === 'pilot') {
+    return 'passenger';
+  }
+  return 'other';
+}
+
 function visible(t) {
   const f = state.filters;
   const s = t.sources || [];
-  if (t.dark) return f.dark;
-  return (
-    (s.includes('ais') && f.ais) ||
-    (s.includes('sonar') && f.sonar) ||
-    (s.includes('lidar') && f.lidar) ||
-    (s.includes('radar') && f.sonar)
-  );
+  const srcOk = t.dark
+    ? f.dark
+    : (s.includes('ais') && f.ais) ||
+      (s.includes('sonar') && f.sonar) ||
+      (s.includes('lidar') && f.lidar) ||
+      (s.includes('radar') && f.sonar);
+  if (!srcOk) return false;
+  if (state.classFilter && shapeOf(t) !== state.classFilter) return false;
+  if (state.inViewOnly && !map.getBounds().contains([t.lon, t.lat])) return false;
+  return true;
+}
+
+/// Dead-reckon the icon between AIS reports so ships glide instead of jumping.
+/// Extrapolation is capped at 45 s, so a stale track stops rather than flying.
+function positionOf(t) {
+  const trail = t.trail || [];
+  if (trail.length < 2) return [t.lon, t.lat];
+  const b = trail[trail.length - 1];
+  const t1 = Date.parse(b.ts);
+  if (!t1) return [b.lon, b.lat];
+  const dt = (Date.now() - t1) / 1000;
+  if (dt <= 0 || dt > 600) return [b.lon, b.lat];
+  const sog = t.sog;
+  const cog = t.cog;
+  if (!sog || sog < 0.5 || cog === null || cog === undefined) return [b.lon, b.lat];
+  const cap = Math.min(dt, 45);
+  const dist = sog * 0.514444 * cap;
+  const R = 6371000;
+  const br = (cog * Math.PI) / 180;
+  const lat1 = (b.lat * Math.PI) / 180;
+  const lon1 = (b.lon * Math.PI) / 180;
+  const d = dist / R;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(d) + Math.cos(lat1) * Math.sin(d) * Math.cos(br));
+  const lon2 =
+    lon1 +
+    Math.atan2(Math.sin(br) * Math.sin(d) * Math.cos(lat1), Math.cos(d) - Math.sin(lat1) * Math.sin(lat2));
+  let lon = (lon2 * 180) / Math.PI;
+  if (lon > 180) lon -= 360;
+  if (lon < -180) lon += 360;
+  return [lon, (lat2 * 180) / Math.PI];
 }
 
 function matchSearch(t) {
@@ -475,7 +648,6 @@ function matchSearch(t) {
   if (!q) return true;
   return (
     labelOf(t).toLowerCase().includes(q) ||
-    String(t.mmsi || '').includes(q) ||
     String(t.mmsi || '').includes(q) ||
     String(t.imo || '').includes(q) ||
     (t.classification || '').toLowerCase().includes(q)
@@ -488,26 +660,44 @@ function tracksFC() {
     if (!visible(t) || !matchSearch(t)) continue;
     feats.push({
       type: 'Feature',
-      geometry: { type: 'Point', coordinates: [t.lon, t.lat] },
+      geometry: { type: 'Point', coordinates: positionOf(t) },
       properties: {
         id: t.id,
         name: labelOf(t),
         style: styleOf(t),
+        shape: shapeOf(t),
         heading: t.heading ?? t.cog ?? 0,
         dark: !!t.dark,
         cls: t.classification || '',
+        // dark contacts and alerts win label collisions
+        priority: t.dark ? 0 : 1,
       },
     });
   }
   return { type: 'FeatureCollection', features: feats };
 }
 
+/// Trails are the heaviest layer (points x tracks x refresh rate), so they are
+/// trimmed to what can actually be seen: nothing at world zoom, only tracks in
+/// view, at most TRAIL_MAX of them, and fewer points each when crowded.
 function trailsFC() {
+  const zoom = map.getZoom();
+  if (zoom < 5) return EMPTY_FC; // sub-pixel at this scale
+  const bounds = map.getBounds();
+  const all = [...state.tracks.values()].filter(
+    (t) => visible(t) && matchSearch(t) && (t.trail || []).length >= 2
+  );
+  const crowded = all.length > 600;
+  const maxTracks = crowded ? 250 : 1200;
+  const pointCap = crowded ? 25 : 90;
+  const chosen = crowded
+    ? all.sort((a, b) => String(b.last_seen).localeCompare(String(a.last_seen))).slice(0, maxTracks)
+    : all;
   const feats = [];
-  for (const t of state.tracks.values()) {
-    if (!visible(t) || !matchSearch(t)) continue;
-    const trail = t.trail || [];
-    if (trail.length < 2) continue;
+  for (const t of chosen) {
+    if (!bounds.contains([t.lon, t.lat])) continue;
+    let trail = t.trail;
+    if (trail.length > pointCap) trail = trail.slice(-pointCap);
     feats.push({
       type: 'Feature',
       geometry: { type: 'LineString', coordinates: trail.map((p) => [p.lon, p.lat]) },
@@ -528,19 +718,33 @@ function zonesFC() {
   };
 }
 
+const EVENT_COLORS = {
+  FISHING: '#f59e0b',
+  ENCOUNTER: '#ef4444',
+  LOITERING: '#a855f7',
+  GAP: '#22d3ee',
+  PORT_VISIT: '#4ade80',
+};
+
 function gfwFC() {
   return {
     type: 'FeatureCollection',
-    features: state.gfwEvents.map((e) => ({
-      type: 'Feature',
-      geometry: { type: 'Point', coordinates: [e.lon, e.lat] },
-      properties: {
-        name: e.vessel_name || '',
-        type: e.event_type,
-        ssvid: e.ssvid || '',
-        vessel_id: e.vessel_id || '',
-      },
-    })),
+    features: state.gfwEvents
+      .filter((e) => state.eventTypes[(e.event_type || '').toUpperCase()] !== false)
+      .map((e) => {
+        const kind = (e.event_type || 'FISHING').toUpperCase();
+        return {
+          type: 'Feature',
+          geometry: { type: 'Point', coordinates: [e.lon, e.lat] },
+          properties: {
+            name: e.vessel_name || '',
+            type: kind,
+            color: EVENT_COLORS[kind] || '#f59e0b',
+            ssvid: e.ssvid || '',
+            vessel_id: e.vessel_id || '',
+          },
+        };
+      }),
   };
 }
 
@@ -568,7 +772,27 @@ function pushData() {
   set('zones', zonesFC());
   set('gfw', gfwFC());
   set('own', ownFC());
+  set('history', historyFC());
   updateDarkMarkers();
+}
+
+/// Recorded positions for the replay scrubber (dimmed, non-interactive).
+function historyFC() {
+  if (!state.history) return EMPTY_FC;
+  return {
+    type: 'FeatureCollection',
+    features: state.history.map((p) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [p.lon, p.lat] },
+      properties: {
+        name: p.name || p.id,
+        style: p.dark ? 'dark' : 'ais',
+        shape: shapeOf(p),
+        heading: p.cog ?? 0,
+        id: p.id,
+      },
+    })),
+  };
 }
 
 function pushDraw() {
@@ -626,7 +850,9 @@ function applyLayerVisibility() {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
   };
   v('tracks-icons', state.layers.tracks);
-  v('tracks-labels', state.layers.labels);
+  // thousands of labels would dominate frame time and are unreadable anyway
+  const labelsUseful = state.tracks.size <= 600 || map.getZoom() >= 9;
+  v('tracks-labels', state.layers.labels && labelsUseful);
   v('trails-line', state.layers.trails);
   v('zones-fill', state.layers.zones);
   v('zones-line', state.layers.zones);
@@ -637,12 +863,29 @@ function applyLayerVisibility() {
 
 /* ------------------------------------------------------------------- ws */
 
+/// Tell the server what we can actually see, so it can stop streaming the
+/// rest of the planet to this tab.
+function sendViewport(ws) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const b = map.getBounds();
+  ws.send(
+    JSON.stringify({
+      type: 'viewport',
+      bounds: { w: b.getWest(), s: b.getSouth(), e: b.getEast(), n: b.getNorth() },
+    })
+  );
+}
+
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}/ws`);
+  const token = apiToken();
+  const url = `${proto}://${location.host}/ws${token ? '?token=' + encodeURIComponent(token) : ''}`;
+  const ws = new WebSocket(url);
+  state.ws = ws;
   ws.onopen = () => {
     state.wsOk = true;
     chip('chip-ws', 'WS LIVE', 'ok');
+    sendViewport(ws);
   };
   ws.onclose = () => {
     state.wsOk = false;
@@ -671,6 +914,8 @@ function applyState(msg) {
   state.app = msg.app || {};
   state.ownShip = msg.own_ship || null;
   state.gfwEvents = msg.gfw_events || [];
+  state.watchlist = msg.watchlist || [];
+  state.hiddenTracks = msg.hidden_tracks || 0;
 
   if (state.firstState && state.app.aoi && !state.userMoved) {
     state.firstState = false;
@@ -682,6 +927,7 @@ function applyState(msg) {
   renderTrackList();
   renderAlerts();
   renderZones();
+  renderWatchlist();
   renderFeeds();
   renderStats();
   renderChips();
@@ -692,8 +938,11 @@ function pushAlert(a) {
   const idx = state.alerts.findIndex((x) => x.id === a.id);
   if (idx === -1) state.alerts.unshift(a);
   renderAlerts();
-  if (a.kind === 'dark_contact') banner(a.message, 'bad');
-  else if (a.kind === 'ais_lost') banner(a.message, 'warn');
+  if (a.kind === 'dark_contact' || a.kind === 'watchlist_hit' || a.kind === 'collision_risk') {
+    banner(a.message, 'bad');
+  } else if (a.kind === 'ais_lost' || a.kind === 'feed_stalled') {
+    banner(a.message, 'warn');
+  }
 }
 
 /* --------------------------------------------------------------- panels */
@@ -724,22 +973,49 @@ function renderChips() {
   // shown as a chip — with global feeds it read like a data limit.
   const hint = document.getElementById('gfw-hint');
   if (hint) {
+    const extra = [];
+    if (app.recording) extra.push('track recording is ON (replay scrubber available)');
+    if ((app.alert_destinations || []).length) {
+      extra.push(`out-of-band alerts → ${app.alert_destinations.join(', ')}`);
+    } else {
+      extra.push('alerts are in-UI only (add [alerts] webhooks or Telegram in config.toml)');
+    }
     hint.textContent = app.gfw_enabled
-      ? 'Global Fishing Watch enrichment is active. Select a vessel with an MMSI, or query fishing events in the current view.'
+      ? 'Global Fishing Watch enrichment is active. Select a vessel with an MMSI, or query fishing events in the current view. Note: ' +
+        extra.join('; ') + '.'
       : 'Optional: Global Fishing Watch adds registry identity, apparent fishing events, AIS-gap history and IUU-list status. Everything else on this map works without it. To enable it, get a free non-commercial token at globalfishingwatch.org/our-apis/tokens, put GFW_API_TOKEN=… in a .env file next to the app, and restart.';
   }
 }
 
-function renderTrackList() {
+let lastListRender = 0;
+
+function renderTrackList(force) {
+  // rebuilding 400 rows every second is wasted work: the map is the live view
+  const now = Date.now();
+  if (!force && now - lastListRender < 2000) return;
+  lastListRender = now;
   const list = document.getElementById('track-list');
   const rows = [];
   for (const t of state.tracks.values()) {
     if (!visible(t) || !matchSearch(t)) continue;
     rows.push(t);
   }
-  rows.sort((a, b) => (b.dark ? 1 : 0) - (a.dark ? 1 : 0) || String(b.last_seen).localeCompare(String(a.last_seen)));
-  document.getElementById('track-count').textContent = `${rows.length} tracks`;
-  list.innerHTML = rows
+  const center = map.getCenter();
+  if (state.sortBy === 'name') {
+    rows.sort((a, b) => labelOf(a).localeCompare(labelOf(b)));
+  } else if (state.sortBy === 'distance') {
+    rows.sort((a, b) => distanceKm(a, center) - distanceKm(b, center));
+  } else if (state.sortBy === 'speed') {
+    rows.sort((a, b) => (b.sog || 0) - (a.sog || 0));
+  } else {
+    rows.sort((a, b) => (b.dark ? 1 : 0) - (a.dark ? 1 : 0) || String(b.last_seen).localeCompare(String(a.last_seen)));
+  }
+  const total = rows.length;
+  const CAP = 400;
+  const shown = rows.slice(0, CAP);
+  document.getElementById('track-count').textContent =
+    total > CAP ? `${shown.length} of ${total} tracks` : `${total} tracks`;
+  list.innerHTML = shown
     .map((t) => {
       const s = styleOf(t);
       const sel = state.selected === t.id ? ' sel' : '';
@@ -758,9 +1034,22 @@ function renderTrackList() {
       </div>`;
     })
     .join('');
-  list.querySelectorAll('.row').forEach((el) =>
+  if (total > CAP) {
+    list.insertAdjacentHTML(
+      'beforeend',
+      `<div class="row" style="justify-content:center;color:#6b8299">showing first ${CAP} of ${total} — filter or zoom in to narrow</div>`
+    );
+  }
+  list.querySelectorAll('.row[data-id]').forEach((el) =>
     el.addEventListener('click', () => selectTrack(el.dataset.id))
   );
+}
+
+/// Rough great-circle distance in km (sorting only).
+function distanceKm(t, c) {
+  const dLat = (t.lat - c.lat) * 111.32;
+  const dLon = (t.lon - c.lng) * 111.32 * Math.cos((c.lat * Math.PI) / 180);
+  return Math.sqrt(dLat * dLat + dLon * dLon);
 }
 
 function renderAlerts() {
@@ -783,6 +1072,116 @@ function renderAlerts() {
   );
 }
 
+function renderWatchlist() {
+  const el = document.getElementById('watch-list');
+  if (!el) return;
+  const w = state.watchlist || [];
+  document.getElementById('watch-count').textContent = `${w.length} watched`;
+  el.innerHTML = w.length
+    ? w
+        .map(
+          (e) => `<div class="zrow">
+            <span>${e.mmsi ? 'MMSI ' + esc(e.mmsi) : e.imo ? 'IMO ' + esc(e.imo) : esc(e.name || '')}${
+            e.name && (e.mmsi || e.imo) ? ' · ' + esc(e.name) : ''
+          }${e.note ? ' <span style="color:#fbbf24">(' + esc(e.note) + ')</span>' : ''}</span>
+            <span class="zx" data-id="${esc(e.id)}" title="remove">✕</span>
+          </div>`
+        )
+        .join('')
+    : '<div style="color:#6b8299">Nothing watched yet. Add an MMSI, IMO or exact name — or select a vessel and press WATCH.</div>';
+  el.querySelectorAll('.zx').forEach((x) =>
+    x.addEventListener('click', () => deleteWatch(x.dataset.id))
+  );
+}
+
+async function addWatch(mmsi, imo, name, note) {
+  const body = {};
+  if (mmsi) body.mmsi = Number(mmsi);
+  if (imo) body.imo = Number(imo);
+  if (name) body.name = name;
+  if (note) body.note = note;
+  if (!body.mmsi && !body.imo && !body.name) {
+    banner('Enter an MMSI, IMO or name to watch for.', 'warn');
+    return;
+  }
+  try {
+    const r = await api('/api/watchlist', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    banner(`Watching ${body.mmsi || body.imo || body.name} — you will be alerted when it appears.`);
+  } catch (e) {
+    banner('watchlist add failed: ' + e.message, 'warn');
+  }
+}
+
+async function deleteWatch(id) {
+  try {
+    await api(`/api/watchlist?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    state.watchlist = (state.watchlist || []).filter((w) => w.id !== id);
+    renderWatchlist();
+  } catch (e) {
+    banner('watchlist remove failed: ' + e.message, 'warn');
+  }
+}
+
+// ---------------------------------------------------------------- replay
+
+function updateReplayUI() {
+  const bar = document.getElementById('replaybar');
+  const label = document.getElementById('replay-label');
+  const live = document.getElementById('replay-live');
+  if (!bar) return;
+  const on = !!state.history;
+  bar.classList.toggle('hidden', !on && !state.app.recording);
+  live.classList.toggle('hidden', !on);
+  if (!on) {
+    label.textContent = state.app.recording ? 'RECORDING — scrub to replay' : '';
+    return;
+  }
+  const d = new Date(state.replayTs);
+  label.textContent = `REPLAY ${d.toISOString().slice(0, 16).replace('T', ' ')}Z · ${state.history.length} vessels`;
+}
+
+async function loadHistory(ts) {
+  try {
+    const r = await api(`/api/history${ts ? '?ts=' + Math.floor(ts) : ''}`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || r.statusText);
+    state.history = d.points || [];
+    state.replayTs = Date.parse(d.ts);
+    const slider = document.getElementById('replay-slider');
+    if (slider) {
+      const from = Date.parse(d.from) / 1000;
+      const to = Date.parse(d.to) / 1000;
+      slider.min = String(from);
+      slider.max = String(to);
+      slider.value = String(state.replayTs / 1000);
+    }
+    pushData();
+    updateReplayUI();
+  } catch (e) {
+    banner('replay failed: ' + e.message, 'warn');
+  }
+}
+
+function exitReplay() {
+  state.history = null;
+  state.replayTs = null;
+  pushData();
+  updateReplayUI();
+}
+
+function activeEventTypes() {
+  return Object.entries(state.eventTypes)
+    .filter(([, v]) => v)
+    .map(([k]) => k)
+    .join(',');
+}
+
 function renderZones() {
   const el = document.getElementById('zone-list');
   if (!el) return;
@@ -794,7 +1193,7 @@ function renderZones() {
   el.querySelectorAll('.zx').forEach((x) =>
     x.addEventListener('click', async (ev) => {
       ev.stopPropagation();
-      await fetch(`/api/zones?id=${encodeURIComponent(x.dataset.id)}`, { method: 'DELETE' });
+      await api(`/api/zones?id=${encodeURIComponent(x.dataset.id)}`, { method: 'DELETE' });
     })
   );
 }
@@ -813,7 +1212,8 @@ function renderFeeds() {
 function renderStats() {
   const s = state.stats || {};
   document.getElementById('stats').innerHTML = [
-    `TRACKS <b>${s.tracks ?? 0}</b>`,
+    `TRACKS <b>${s.tracks ?? 0}</b>${state.hiddenTracks ? ` (+${state.hiddenTracks} out of view)` : ''}`,
+    `WATCH <b>${s.watchlist ?? 0}</b>`,
     `AIS <b>${s.ais ?? 0}</b>`,
     `DARK <b style="color:#ef4444">${s.dark ?? 0}</b>`,
     `SENSOR <b>${s.sensor_tracked ?? 0}</b>`,
@@ -849,12 +1249,12 @@ async function fetchGfwForTrack(t) {
   try {
     let r, data;
     try {
-      r = await fetch(url);
+      r = await api(url);
       data = await r.json();
     } catch (netErr) {
       // one retry: the app may have been restarting when the click landed
       await new Promise((res) => setTimeout(res, 1500));
-      r = await fetch(url);
+      r = await api(url);
       data = await r.json();
     }
     const cur = state.tracks.get(t.id);
@@ -981,6 +1381,9 @@ function renderDrawer() {
   push('Last seen', ageStr(t.last_seen) + ' ago');
   push('First seen', ageStr(t.first_seen) + ' ago');
   push('Confidence', num(t.confidence * 100, 0) + '%');
+  if (t.cpa_m !== null && t.cpa_m !== undefined) {
+    push('Closest approach', `${num(t.cpa_m, 0)} m${t.tcpa_min !== null && t.tcpa_min !== undefined ? ` in ${num(t.tcpa_min, 1)} min` : ''}`);
+  }
 
   const gfwVesselId = t.gfw && t.gfw.vessel_id;
   const gfwHtml = t.gfw
@@ -1008,6 +1411,11 @@ function renderDrawer() {
     <div style="display:flex;gap:6px;flex-wrap:wrap">
       <button class="btn" id="d-fly">FLY TO</button>
       <button class="btn ghost" id="d-copy">COPY JSON</button>
+      ${
+        t.mmsi || t.imo || t.name
+          ? `<button class="btn ghost" id="d-watch">WATCH</button>`
+          : ''
+      }
       ${gfwVesselId ? `<a class="btn ghost" style="text-decoration:none" target="_blank" rel="noopener" href="https://globalfishingwatch.org/map/?vesselId=${encodeURIComponent(gfwVesselId)}">GFW MAP ↗</a>` : ''}
     </div>
     ${gfwHtml}
@@ -1021,6 +1429,10 @@ function renderDrawer() {
   };
   const fetchBtn = document.getElementById('gfw-fetch');
   if (fetchBtn) fetchBtn.onclick = () => fetchGfwForTrack(t);
+  const watchBtn = document.getElementById('d-watch');
+  if (watchBtn) {
+    watchBtn.onclick = () => addWatch(t.mmsi, t.imo, t.name, 'from map');
+  }
 }
 
 document.getElementById('drawer-close').onclick = closeDrawer;
@@ -1052,7 +1464,7 @@ function finishZone() {
   }
   if (cleaned.length < 3) cleaned.push(...poly.slice(0, 3 - cleaned.length));
   const name = prompt('Zone name:', `Zone ${state.zones.length + 1}`) || `Zone ${state.zones.length + 1}`;
-  fetch('/api/zones', {
+  api('/api/zones', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ name, polygon: cleaned, color: '#38bdf8' }),
@@ -1081,7 +1493,7 @@ async function queryGfwEvents(bboxOverride = null, days = 14, limit = 250, label
     ? 'querying the whole globe — this can take about a minute…'
     : 'querying Global Fishing Watch…';
   try {
-    const r = await fetch(`/api/gfw/events?bbox=${bbox}&days=${days}&limit=${limit}`);
+    const r = await api(`/api/gfw/events?bbox=${bbox}&days=${days}&limit=${limit}&types=${activeEventTypes()}`);
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     state.gfwEvents = data.events || [];
@@ -1102,11 +1514,11 @@ async function gfwLookup(queryArg) {
   try {
     let r, data;
     try {
-      r = await fetch(url);
+      r = await api(url);
       data = await r.json();
     } catch (netErr) {
       await new Promise((res) => setTimeout(res, 1500));
-      r = await fetch(url);
+      r = await api(url);
       data = await r.json();
     }
     state.selected = null;
@@ -1149,7 +1561,7 @@ document.querySelectorAll('.fchip').forEach((el) =>
     state.filters[k] = !state.filters[k];
     el.classList.toggle('on', state.filters[k]);
     pushData();
-    renderTrackList();
+    renderTrackList(true);
   })
 );
 
@@ -1170,7 +1582,7 @@ document.querySelectorAll('input[data-filter]').forEach((el) =>
 document.getElementById('search').addEventListener('input', (e) => {
   state.search = e.target.value;
   pushData();
-  renderTrackList();
+  renderTrackList(true);
 });
 
 // basemap switcher (satellite / dark / streets), remembered across reloads
@@ -1195,10 +1607,93 @@ document.getElementById('clear-alerts').onclick = () => {
 document.getElementById('draw-zone').onclick = startDraw;
 document.getElementById('clear-zones').onclick = async () => {
   for (const z of [...state.zones]) {
-    await fetch(`/api/zones?id=${encodeURIComponent(z.id)}`, { method: 'DELETE' });
+    await api(`/api/zones?id=${encodeURIComponent(z.id)}`, { method: 'DELETE' });
   }
 };
 document.getElementById('gfw-query').onclick = () => queryGfwEvents();
+
+// --- watchlist panel --------------------------------------------------------
+const watchAdd = document.getElementById('watch-add');
+if (watchAdd) {
+  watchAdd.onclick = () => {
+    const v = document.getElementById('watch-input').value.trim();
+    const note = document.getElementById('watch-note').value.trim();
+    if (!v) return;
+    document.getElementById('watch-input').value = '';
+    document.getElementById('watch-note').value = '';
+    if (/^\d{6,9}$/.test(v)) addWatch(v, null, null, note);
+    else if (/^IMO\s*\d{5,9}$/i.test(v)) addWatch(null, v.replace(/\D/g, ''), null, note);
+    else addWatch(null, null, v, note);
+  };
+  document.getElementById('watch-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') watchAdd.click();
+  });
+}
+
+// --- list filters -----------------------------------------------------------
+const classSelect = document.getElementById('class-filter');
+if (classSelect) {
+  classSelect.onchange = () => {
+    state.classFilter = classSelect.value;
+    pushData();
+    renderTrackList(true);
+  };
+}
+const inView = document.getElementById('in-view');
+if (inView) {
+  inView.onchange = () => {
+    state.inViewOnly = inView.checked;
+    pushData();
+    renderTrackList(true);
+  };
+}
+const sortSelect = document.getElementById('sort-by');
+if (sortSelect) {
+  sortSelect.onchange = () => {
+    state.sortBy = sortSelect.value;
+    renderTrackList(true);
+  };
+}
+
+// --- GFW event type filters -------------------------------------------------
+document.querySelectorAll('input[data-event]').forEach((el) =>
+  el.addEventListener('change', () => {
+    state.eventTypes[el.dataset.event] = el.checked;
+    pushData();
+    renderGfwLegend();
+  })
+);
+
+function renderGfwLegend() {
+  const el = document.getElementById('gfw-legend');
+  if (!el) return;
+  el.innerHTML = Object.entries(EVENT_COLORS)
+    .filter(([k]) => state.eventTypes[k])
+    .map(([k, c]) => `<span class="feed"><span class="fstate" style="color:${c}">●</span>${k.toLowerCase().replace('_', ' ')}</span>`)
+    .join('');
+}
+
+// --- replay scrubber --------------------------------------------------------
+const replaySlider = document.getElementById('replay-slider');
+if (replaySlider) {
+  replaySlider.addEventListener('input', () => {
+    loadHistory(Number(replaySlider.value));
+  });
+}
+const replayLive = document.getElementById('replay-live');
+if (replayLive) {
+  replayLive.onclick = () => {
+    exitReplay();
+    loadHistory(null);
+  };
+}
+const replayStart = document.getElementById('replay-start');
+if (replayStart) {
+  replayStart.onclick = () => {
+    const now = Date.now() / 1000;
+    loadHistory(now - 3600);
+  };
+}
 document.getElementById('gfw-query-global').onclick = () =>
   queryGfwEvents([-180, -70, 180, 70], 7, 500, 'worldwide');
 document.getElementById('gfw-clear').onclick = () => {

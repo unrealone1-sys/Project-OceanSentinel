@@ -13,6 +13,8 @@ mod gfw;
 mod land;
 mod model;
 mod nmea;
+mod notify;
+mod persist;
 mod server;
 mod sources;
 mod store;
@@ -138,8 +140,10 @@ async fn main() -> Result<()> {
     // the operator explicitly forced it with --sim/--no-sim or OS_SIM.
     let real_ais = cfg.sources.ais.enabled
         || (cfg.sources.aisstream.enabled && cfg.sources.aisstream.api_key.is_some());
-    let explicit_sim =
-        sim_override.is_some() || std::env::var("OS_SIM").map(|v| !v.trim().is_empty()).unwrap_or(false);
+    let explicit_sim = sim_override.is_some()
+        || std::env::var("OS_SIM")
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
     if cfg.simulation.enabled && real_ais && !explicit_sim {
         cfg.simulation.enabled = false;
         info!("real AIS feed configured — built-in simulator disabled (use --sim to keep it)");
@@ -150,16 +154,25 @@ async fn main() -> Result<()> {
     } else {
         "oceansentinel=info"
     };
+    let paths = persist::Paths::new(&cfg.storage.dir);
+    // Console + a daily rotating file, so an unattended run leaves a trail.
+    let file_appender = tracing_appender::rolling::daily(&paths.root, "oceansentinel.log");
+    let (non_blocking, _log_guard) = tracing_appender::non_blocking(file_appender);
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(filter)),
         )
         .with_target(false)
+        .with_writer(non_blocking)
         .init();
 
     let (event_tx, event_rx) = mpsc::unbounded_channel();
-    let (bcast_tx, _) = broadcast::channel::<String>(256);
-    let store = Arc::new(RwLock::new(store::Store::new(&cfg.fusion)));
+    let (bcast_tx, _) = broadcast::channel::<server::ServerMsg>(256);
+    let store = Arc::new(RwLock::new(store::Store::new(
+        &cfg.fusion,
+        paths.clone(),
+        cfg.watchlist.entries.clone(),
+    )));
     let gfw = Arc::new(gfw::GfwClient::new(&cfg.gfw));
 
     let meta = store::SnapshotMeta {
@@ -170,19 +183,56 @@ async fn main() -> Result<()> {
         gfw_token: gfw.has_token(),
         simulation: cfg.simulation.enabled,
         port: cfg.server.port,
+        recording: cfg.storage.record_tracks,
+        alert_destinations: cfg.alerts.destinations(),
+        auth_required: cfg
+            .server
+            .api_token
+            .as_deref()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false),
     };
+
+    let (notify_tx, notify_rx) = mpsc::unbounded_channel();
+    notify::spawn(cfg.alerts.clone(), notify_rx, paths.clone());
 
     tokio::spawn(
         fusion::Fusion::new(
-            store.clone(),
-            bcast_tx.clone(),
+            fusion::FusionDeps {
+                store: store.clone(),
+                bcast: bcast_tx.clone(),
+                notify: notify_tx,
+                paths: paths.clone(),
+            },
             cfg.fusion.clone(),
             meta,
+            &cfg.storage,
         )
         .run(event_rx),
     );
 
     let handles = sources::spawn_all(&cfg, &event_tx);
+
+    if cfg.alerts.destinations().is_empty() {
+        info!(
+            "alert delivery: UI only (add [alerts] webhooks or Telegram to get alerts off-screen)"
+        );
+    }
+    if cfg.storage.record_tracks {
+        info!(
+            "track recording: ON every {}s into {} (retention {} days)",
+            cfg.storage.record_interval_s,
+            paths.history.display(),
+            cfg.storage.retention_days
+        );
+    }
+    let loopback = matches!(cfg.server.host.as_str(), "127.0.0.1" | "localhost" | "::1");
+    if !loopback && cfg.server.api_token.as_deref().unwrap_or("").is_empty() {
+        warn!(
+            "{} is not loopback and no [server] api_token is set — anyone on the network can read this map and its API",
+            cfg.server.host
+        );
+    }
 
     if gfw.enabled() {
         info!("Global Fishing Watch enrichment: ENABLED");
@@ -197,7 +247,10 @@ async fn main() -> Result<()> {
             let scope = if cfg.sources.aisstream.bounding_boxes.is_empty() {
                 "the whole globe".to_string()
             } else {
-                format!("{} bounding box(es)", cfg.sources.aisstream.bounding_boxes.len())
+                format!(
+                    "{} bounding box(es)",
+                    cfg.sources.aisstream.bounding_boxes.len()
+                )
             };
             info!("global AIS (AISStream.io): ENABLED — subscribed to {scope}");
         } else {
@@ -224,6 +277,7 @@ async fn main() -> Result<()> {
         bcast: bcast_tx.clone(),
         gfw: gfw.clone(),
         cfg: Arc::new(cfg.clone()),
+        history_cache: Arc::new(std::sync::Mutex::new(None)),
     });
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let url = format!("http://{}:{}/", cfg.server.host, cfg.server.port);

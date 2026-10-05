@@ -31,6 +31,8 @@ pub struct RelativeTarget {
     pub true_bearing: bool,
     pub speed_kn: Option<f64>,
     pub course_deg: Option<f64>,
+    pub cpa_m: Option<f64>,
+    pub tcpa_min: Option<f64>,
     pub name: Option<String>,
     pub ts: DateTime<Utc>,
 }

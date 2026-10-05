@@ -158,7 +158,13 @@ pub fn spawn(cfg: SimCfg, aoi: AoiCfg, tx: EventTx) -> JoinHandle<()> {
             let (lat, lon) = if ais_on {
                 water_position(aoi.center_lat, aoi.center_lon, 0.28, 0.34, &mut rng)
             } else {
-                water_position(aoi.center_lat + 0.02, aoi.center_lon - 0.02, 0.085, 0.10, &mut rng)
+                water_position(
+                    aoi.center_lat + 0.02,
+                    aoi.center_lon - 0.02,
+                    0.085,
+                    0.10,
+                    &mut rng,
+                )
             };
             vessels.push(SimVessel {
                 mmsi: if ais_on {
@@ -178,8 +184,13 @@ pub fn spawn(cfg: SimCfg, aoi: AoiCfg, tx: EventTx) -> JoinHandle<()> {
             });
         }
 
-        let (own_lat, own_lon) =
-            water_position(aoi.center_lat + 0.02, aoi.center_lon - 0.02, 0.05, 0.05, &mut rng);
+        let (own_lat, own_lon) = water_position(
+            aoi.center_lat + 0.02,
+            aoi.center_lon - 0.02,
+            0.05,
+            0.05,
+            &mut rng,
+        );
         let mut own = SimVessel {
             mmsi: Some(232_999_999),
             name: "R/V SENTINEL".to_string(),
@@ -211,7 +222,7 @@ pub fn spawn(cfg: SimCfg, aoi: AoiCfg, tx: EventTx) -> JoinHandle<()> {
             }
 
             // Own-ship navigation sentences (GGA/RMC/HDT) + own AIS
-            if tick % 2 == 0 {
+            if tick.is_multiple_of(2) {
                 let t = utc_time();
                 lines_total += 1;
                 router.line(
@@ -325,7 +336,7 @@ pub fn spawn(cfg: SimCfg, aoi: AoiCfg, tx: EventTx) -> JoinHandle<()> {
 
                 let d = geo::haversine_m(own.lat, own.lon, v.lat, v.lon);
 
-                if d <= sonar_range_m && tick % 2 == 0 {
+                if d <= sonar_range_m && tick.is_multiple_of(2) {
                     let brg = geo::bearing_deg(own.lat, own.lon, v.lat, v.lon);
                     // range-dependent bearing error, as a real sonar tracker has
                     let err = (18.0 + 0.012 * d) * rng.gen_range(-1.0..1.0);
@@ -366,8 +377,12 @@ pub fn spawn(cfg: SimCfg, aoi: AoiCfg, tx: EventTx) -> JoinHandle<()> {
                 }
 
                 if d <= lidar_range_m {
-                    let (jlat, jlon) =
-                        geo::destination_point(v.lat, v.lon, rng.gen_range(0.0..360.0), rng.gen_range(0.0..9.0));
+                    let (jlat, jlon) = geo::destination_point(
+                        v.lat,
+                        v.lon,
+                        rng.gen_range(0.0..360.0),
+                        rng.gen_range(0.0..9.0),
+                    );
                     let j = serde_json::json!({
                         "sensor": "lidar",
                         "id": v.name,
@@ -382,7 +397,7 @@ pub fn spawn(cfg: SimCfg, aoi: AoiCfg, tx: EventTx) -> JoinHandle<()> {
                 }
             }
 
-            if tick % 5 == 0 {
+            if tick.is_multiple_of(5) {
                 let _ = tx.send(Event::Feed(feed_status(
                     "simulator",
                     "sim",
@@ -408,7 +423,8 @@ mod tests {
         // 40 km due north of the strait is Spain: the steerer must pick a
         // different heading whose step is on water, deviating as little as
         // the coastline allows.
-        let (_, _, cog) = steer_to_water(36.00, -5.40, 0.0, 40_000.0).expect("a water heading exists");
+        let (_, _, cog) =
+            steer_to_water(36.00, -5.40, 0.0, 40_000.0).expect("a water heading exists");
         assert_ne!(cog, 0.0, "due north is Spain; a deviation was required");
         let (tlat, tlon) = geo::destination_point(36.00, -5.40, cog, 40_000.0);
         assert!(!land::on_land(tlat, tlon), "steered step landed on land");
@@ -419,7 +435,10 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..300 {
             let (lat, lon) = water_position(36.02, -5.36, 0.28, 0.34, &mut rng);
-            assert!(!land::on_land(lat, lon), "spawned on land at {lat:.4},{lon:.4}");
+            assert!(
+                !land::on_land(lat, lon),
+                "spawned on land at {lat:.4},{lon:.4}"
+            );
         }
     }
 

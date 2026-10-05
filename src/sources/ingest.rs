@@ -114,10 +114,9 @@ impl Router {
                         .or_else(|| v.get("cog"))
                         .and_then(|x| x.as_f64())
                         .map(|v| v as f32),
-                    confidence: v
-                        .get("confidence")
-                        .and_then(|x| x.as_f64())
-                        .unwrap_or(0.9) as f32,
+                    cpa_m: v.get("cpa_m").and_then(|x| x.as_f64()),
+                    tcpa_min: v.get("tcpa_min").and_then(|x| x.as_f64()),
+                    confidence: v.get("confidence").and_then(|x| x.as_f64()).unwrap_or(0.9) as f32,
                     ts: Utc::now(),
                 };
                 let _ = tx.send(Event::Contact(c));
@@ -154,7 +153,10 @@ impl Router {
                 match nmea::parse_tll(&s) {
                     Some(t) => {
                         // TLL status: T = tracking, L = lost, Q = query
-                        if t.status.map(|c| c.eq_ignore_ascii_case(&'L')).unwrap_or(false) {
+                        if t.status
+                            .map(|c| c.eq_ignore_ascii_case(&'L'))
+                            .unwrap_or(false)
+                        {
                             tracing::debug!(feed = %self.feed, target = %t.target, "TLL target reported lost; not tracking");
                             return true;
                         }
@@ -169,12 +171,16 @@ impl Router {
                             bearing_deg: None,
                             sog_kn: None,
                             cog_deg: None,
+                            cpa_m: None,
+                            tcpa_min: None,
                             confidence: 0.8,
                             ts: now,
                         };
                         let _ = tx.send(Event::Contact(c));
                     }
-                    None => tracing::warn!(feed = %self.feed, line = %s.raw, "TLL sentence could not be parsed"),
+                    None => {
+                        tracing::warn!(feed = %self.feed, line = %s.raw, "TLL sentence could not be parsed")
+                    }
                 }
                 true
             }
@@ -194,11 +200,15 @@ impl Router {
                             true_bearing: t.true_bearing,
                             speed_kn: t.speed_kn,
                             course_deg: t.course_deg,
+                            cpa_m: t.cpa_m,
+                            tcpa_min: t.tcpa_min,
                             name: t.name,
                             ts: now,
                         }));
                     }
-                    None => tracing::warn!(feed = %self.feed, line = %s.raw, "TTM sentence could not be parsed"),
+                    None => {
+                        tracing::warn!(feed = %self.feed, line = %s.raw, "TTM sentence could not be parsed")
+                    }
                 }
                 true
             }
@@ -243,7 +253,10 @@ mod tests {
     fn routes_tll_and_ais() {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let mut r = Router::new("test", vec!["SD".into(), "SN".into()], false);
-        assert!(r.line("$SDTLL,01,3600.5000,N,00530.2500,W,TGT-9,120000.00,T,*00", &tx));
+        assert!(r.line(
+            "$SDTLL,01,3600.5000,N,00530.2500,W,TGT-9,120000.00,T,*00",
+            &tx
+        ));
         match rx.try_recv().unwrap() {
             Event::Contact(c) => {
                 assert_eq!(c.source, SensorKind::Sonar);
@@ -258,7 +271,10 @@ mod tests {
             other => panic!("unexpected {other:?}"),
         }
         // an unconfigured talker is ignored
-        assert!(!r.line("$GPTLL,02,3600.5000,N,00530.2500,W,OTHER,120000.00,T,*00", &tx));
+        assert!(!r.line(
+            "$GPTLL,02,3600.5000,N,00530.2500,W,OTHER,120000.00,T,*00",
+            &tx
+        ));
     }
 
     #[test]

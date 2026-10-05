@@ -14,7 +14,7 @@ use serde_json::Value;
 use crate::geo;
 
 struct Ring {
-    bbox: [f64; 4], // west, south, east, north
+    bbox: [f64; 4],        // west, south, east, north
     points: Vec<[f64; 2]>, // [lon, lat] as in GeoJSON
 }
 
@@ -127,11 +127,21 @@ mod tests {
     fn mask_loads_and_classifies_known_points() {
         let m = get();
         assert!(m.is_loaded(), "land mask failed to load");
-        assert!(m.ring_count() > 100, "unexpectedly few rings: {}", m.ring_count());
+        assert!(
+            m.ring_count() > 100,
+            "unexpectedly few rings: {}",
+            m.ring_count()
+        );
 
         // the default scenario area must be water, or the demo is impossible
-        assert!(!m.on_land(36.00, -5.40), "Strait of Gibraltar must be water");
-        assert!(!m.on_land(36.04, -5.36), "own-ship start position must be water");
+        assert!(
+            !m.on_land(36.00, -5.40),
+            "Strait of Gibraltar must be water"
+        );
+        assert!(
+            !m.on_land(36.04, -5.36),
+            "own-ship start position must be water"
+        );
         assert!(!m.on_land(35.95, -4.00), "Alboran Sea must be water");
         assert!(!m.on_land(30.00, -40.00), "mid-Atlantic must be water");
 

@@ -24,7 +24,9 @@ build fails**. Always build like this:
 ```bash
 export PATH="$HOME/.cargo/bin:/c/Users/ignun/AppData/Local/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin:$PATH"
 cargo build   --manifest-path 'C:/Users/ignun/.zcode/workspace/default/oceansentinel/Cargo.toml'
-cargo test    --manifest-path '.../Cargo.toml'      # 29 tests, all passing
+cargo test    --manifest-path '.../Cargo.toml'      # 38 tests, all passing
+cargo fmt --all -- --check                                  # CI gate
+cargo clippy --all-targets -- -D warnings                   # CI gate
 cargo build --release --manifest-path '.../Cargo.toml'
 ```
 
@@ -49,7 +51,9 @@ Run with `--no-open` when testing so no browser window is spawned.
 | `src/ais.rs` | AIS 6-bit decode (types 1/2/3/4/5/11/18/19/24), multi-fragment assembler, encoder (sim + tests) |
 | `src/fusion.rs` | Track association, AIS↔sensor corroboration, dark/AIS-lost/zone alerts, 1 Hz snapshot broadcast |
 | `src/store.rs` | In-memory track store, MMSI index, alerts, zones, snapshot JSON |
-| `src/gfw.rs` | Global Fishing Watch v3 client (search / detail / insights / events) with TTL cache |
+| `src/gfw.rs` | Global Fishing Watch v3 client (search / detail / insights / multi-dataset events) with TTL cache |
+| `src/persist.rs` | Atomic JSON state (zones/watchlist), JSONL alert log, history recording + retention |
+| `src/notify.rs` | Out-of-band alert delivery: webhooks + Telegram, severity floor, rate limit |
 | `src/server.rs` | axum REST + WebSocket + embedded UI (`rust-embed`) |
 | `src/sources/ingest.rs` | Per-feed router: one `Router` per feed owns the AIS assembler + own-ship state |
 | `src/sources/aisstream.rs` | Global live AIS over WebSocket (AISStream.io), mapped onto `AisBody` |
@@ -93,7 +97,25 @@ per-feed AIS fragment assembly and own-ship state.
   disk (UI edits visible on browser reload); release builds embed at compile
   time, so **UI changes need a release rebuild** before shipping.
 * **`config.toml` is generated** from `config.example.toml` on first run and is
-  gitignored. Keep the example file authoritative for defaults.
+  gitignored. Keep the example file authoritative for defaults. Runtime state
+  (zones, watchlist, alert log, history, logs) lives under `data/` — also
+  gitignored, deleted freely.
+* **Precedence is config < environment < CLI** in `apply_overrides`. CLI flags
+  used to lose to a stale `OS_PORT` in `.env`; don't reorder the blocks.
+* **The broadcast channel carries `ServerMsg`** (`State(Arc<Value>)`,
+  `Alert(Value)`, `Zones`), not `String`. Each WebSocket connection filters the
+  snapshot to its viewport (`filter_snapshot`) — snapshots are shared Arcs, so
+  per-connection trimming must clone the value, never mutate the shared one.
+* **Alerts flow through the notify channel**: `Fusion::flush_alerts` sends every
+  alert to `notify.rs`, which owns `data/alerts.jsonl` and out-of-band delivery.
+  Never write the alert log from fusion directly (double writes).
+* **Recording** (`[storage] record_tracks`) writes `HistoryPoint` batches (one
+  per interval, `ts` shared) to `data/history/<day>.jsonl`; `/api/history`
+  caches the parsed day and must invalidate on mtime. Pruning runs once per day
+  key change.
+* **Server auth**: `guard()` checks `Authorization: Bearer` or `?token=` against
+  `[server] api_token` with a constant-time compare. The UI stores it in
+  localStorage and appends it to every fetch + the WebSocket URL.
 * **JSON ingest precedence**: an explicit `"sensor":"lidar"` marker is evaluated
   *before* the mmsi heuristic, because LiDAR contacts may carry an `mmsi` to pin
   them to an AIS track. Getting this order wrong silently turns sensor contacts

@@ -43,8 +43,8 @@ pub fn point_in_poly(lat: f64, lon: f64, poly: &[[f64; 2]]) -> bool {
         let (xi, yi) = (poly[i][0], poly[i][1]);
         let (xj, yj) = (poly[j][0], poly[j][1]);
         // (yj - yi) cannot be zero here: the sign test above guarantees it.
-        let intersect = ((yi > lat) != (yj > lat))
-            && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
+        let intersect =
+            ((yi > lat) != (yj > lat)) && (lon < (xj - xi) * (lat - yi) / (yj - yi) + xi);
         if intersect {
             inside = !inside;
         }

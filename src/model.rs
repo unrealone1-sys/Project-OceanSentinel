@@ -34,6 +34,9 @@ pub struct Contact {
     /// Target speed/course when the sensor reports them (NMEA TTM does).
     pub sog_kn: Option<f32>,
     pub cog_deg: Option<f32>,
+    /// Closest point of approach / time to it, when the tracker provides them.
+    pub cpa_m: Option<f64>,
+    pub tcpa_min: Option<f64>,
     pub confidence: f32,
     pub ts: DateTime<Utc>,
 }
@@ -72,6 +75,10 @@ pub struct Track {
     /// be reset by sonar/LiDAR contacts).
     pub last_ais: Option<DateTime<Utc>>,
     pub last_sensor_contact: Option<DateTime<Utc>>,
+    /// Closest point of approach and time to it, as reported by a target
+    /// tracker (NMEA TTM). Only populated for own-ship sensor targets.
+    pub cpa_m: Option<f64>,
+    pub tcpa_min: Option<f64>,
     pub trail: Vec<TrailPoint>,
     pub confidence: f32,
     /// True while the target is tracked by sonar/lidar but transmits no AIS.
@@ -108,6 +115,8 @@ impl Track {
             last_seen: c.ts,
             last_ais: None,
             last_sensor_contact: Some(c.ts),
+            cpa_m: c.cpa_m,
+            tcpa_min: c.tcpa_min,
             trail: Vec::new(),
             confidence: c.confidence,
             dark: c.mmsi.is_none(),
@@ -141,6 +150,8 @@ impl Track {
             last_seen: ts,
             last_ais: Some(ts),
             last_sensor_contact: None,
+            cpa_m: None,
+            tcpa_min: None,
             trail: Vec::new(),
             confidence: 0.6,
             dark: false,
@@ -228,6 +239,89 @@ pub struct GfwEvent {
     pub ssvid: Option<String>,
 }
 
+/// One watchlist entry: matched against live tracks by MMSI, IMO or exact name.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WatchEntry {
+    /// Filled in automatically when omitted from config.toml.
+    #[serde(default)]
+    pub id: String,
+    pub mmsi: Option<u32>,
+    pub imo: Option<u32>,
+    pub name: Option<String>,
+    pub note: Option<String>,
+    #[serde(default = "Utc::now")]
+    pub added: DateTime<Utc>,
+}
+
+impl WatchEntry {
+    pub fn label(&self) -> String {
+        self.name
+            .clone()
+            .or_else(|| self.mmsi.map(|m| format!("MMSI {m}")))
+            .or_else(|| self.imo.map(|i| format!("IMO {i}")))
+            .unwrap_or_else(|| self.id.clone())
+    }
+
+    pub fn matches_track(&self, t: &Track) -> bool {
+        if let Some(m) = self.mmsi {
+            if t.mmsi == Some(m) {
+                return true;
+            }
+        }
+        if let Some(i) = self.imo {
+            if t.imo == Some(i) {
+                return true;
+            }
+        }
+        if let Some(n) = self
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+        {
+            if let Some(tn) = t.name.as_deref() {
+                if tn.trim().eq_ignore_ascii_case(n) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+}
+
+/// Best-effort vessel class from a tracker label. Marine target trackers
+/// transcribe names with their type prefix, so this recovers something useful
+/// about a contact that carries no AIS identity at all.
+pub fn classify_from_label(label: &str) -> &'static str {
+    let l = label.trim_start().to_ascii_uppercase();
+    for (prefix, class) in [
+        ("F/V", "fishing"),
+        ("FV ", "fishing"),
+        ("M/V", "cargo"),
+        ("MV ", "cargo"),
+        ("M/T", "tanker"),
+        ("MT ", "tanker"),
+        ("TUG", "towing"),
+        ("P/V", "patrol"),
+        ("PV ", "patrol"),
+        ("SY ", "sailing"),
+    ] {
+        if l.starts_with(prefix) {
+            return class;
+        }
+    }
+    "unknown"
+}
+
+/// Ordinal ranking for severity strings ("high" > "medium" > "info").
+pub fn severity_rank(s: &str) -> u8 {
+    match s {
+        "high" => 2,
+        "medium" => 1,
+        _ => 0,
+    }
+}
+
 /// Map an AIS ship-and-cargo type code to a coarse class used for icons/filters.
 pub fn classify_ship_type(t: u8) -> &'static str {
     match t {
@@ -249,5 +343,21 @@ pub fn classify_ship_type(t: u8) -> &'static str {
         80..=89 => "tanker",
         90..=99 => "other",
         _ => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_sensor_labels() {
+        assert_eq!(classify_from_label("F/V ATLANTIC DAWN"), "fishing");
+        assert_eq!(classify_from_label("MV BALTIC TRADER"), "cargo");
+        assert_eq!(classify_from_label("MT PACIFIC STAR"), "tanker");
+        assert_eq!(classify_from_label("TUG ADRIATIC TRADER"), "towing");
+        assert_eq!(classify_from_label("P/V LEVANT HORIZON"), "patrol");
+        assert_eq!(classify_from_label("DARK-03"), "unknown");
+        assert_eq!(classify_from_label(""), "unknown");
     }
 }

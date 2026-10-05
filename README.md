@@ -9,6 +9,16 @@ on an OSIRIS-style live dark map.
 Written in Rust (tokio + axum + MapLibre). Single self-contained `.exe`: the map
 UI, WebSocket feed and API are embedded in the binary.
 
+![Live map](docs/screenshot-map.jpg)
+
+*Live map over satellite imagery: clustered worldwide AIS, class-shaped icons,
+labels, geofence grid. Detail view:*
+
+![Vessel detail](docs/screenshot-detail.jpg)
+
+*Every vessel click pulls its Global Fishing Watch registry record — flag,
+owner, gear type, fishing effort, AIS coverage and IUU status.*
+
 ```
         AIS radio                 sonar / radar / ARPA            marine LiDAR
   (RTL-SDR + AIS-catcher)        (NMEA 0183 TLL / TTM)         (contact JSON over UDP)
@@ -244,11 +254,15 @@ drawer. Without a token everything else still works.
 
 ## The map
 
-* **Basemap switcher** (LAYERS tab): **Satellite** (Esri World Imagery, the
-  default — coastlines and shoals are always visible), **Dark** (CARTO dark,
-  minimal and very quiet over open ocean) and **Streets** (OpenStreetMap). The
-  choice is remembered between sessions. A local lat/lon graticule is always
-  drawn, so the map keeps its bearings even with no tiles at all.
+* **Built for worldwide feeds**: markers are clustered below zoom 8, snapshots
+  are trimmed to your viewport server-side (`TRACKS 2500 (+1836 out of view)` in
+  the status bar tells you what was skipped), trails thin adaptively, and the
+  sidebar caps at 400 rows with class/sort/in-view filters.
+* **Vessels glide** between AIS reports (dead-reckoned along course and speed,
+  capped at 45 s so stale tracks stop instead of flying).
+* **Class-shaped icons** — fishing, cargo/tanker, passenger/patrol silhouettes,
+  tinted by source — plus a basemap switcher (Satellite / Dark / Streets) and an
+  always-on lat/lon graticule.
 * **Live tracks** — triangle icons rotate with heading/course, coloured by
   source: cyan = AIS, orange = sonar/radar, green = LiDAR, white = AIS
   confirmed by a physical sensor, pulsing red = dark contact (no AIS).
@@ -274,7 +288,32 @@ drawer. Without a token everything else still works.
   "AIS matches reality" check; spoofed AIS rarely survives an independent
   physical sensor).
 * AIS tracks that fall silent for `ais_lost_after_s` raise **AIS LOST**.
-* Geofence zones raise entry alerts with a per-track cooldown.
+* Geofence zones raise entry alerts with a per-track cooldown. Zones and the
+  watchlist persist across restarts (`data/zones.json`, `data/watchlist.json`).
+* **Watchlist hits**: add any MMSI / IMO / exact name (UI WATCH tab, the vessel
+  drawer, or `config.toml`) and its appearance raises a high-severity alert —
+  in the UI and via any configured delivery channel.
+* **Collision risk (CPA/TCPA)**: when a target tracker reports a closest point
+  of approach inside `[fusion] collision_cpa_m` within `collision_tcpa_min`,
+  a high-severity alert fires.
+* **Feed-silence detection**: a connected feed that stops sending raises
+  FEED SILENT — a stale map looks exactly like a quiet ocean otherwise.
+
+### Out-of-band alert delivery
+
+Alerts can reach you when the window is closed. Configure in `config.toml`
+(or `OS_ALERT_WEBHOOK` / `OS_TELEGRAM_BOT_TOKEN` + `OS_TELEGRAM_CHAT_ID` in
+`.env`):
+
+```toml
+[alerts]
+webhooks = ["https://hooks.slack.com/services/…"]   # Discord/Teams/Zapier/n8n work too
+min_severity = "medium"        # info | medium | high
+max_per_minute = 30            # flood guard
+```
+
+Every alert is also appended to `data/alerts.jsonl` (and the last ~120 are
+reloaded on startup), so there is always an audit trail.
 
 ## HTTP API
 
@@ -285,15 +324,37 @@ drawer. Without a token everything else still works.
 | `GET /ws` | live WebSocket stream (`{"type":"state"}` every tick, `{"type":"alert"}`) |
 | `GET /api/gfw/vessel?mmsi=` (or `imo=`, `name=`, `id=`) | GFW identity + insights |
 | `GET /api/gfw/events?bbox=w,s,e,n&days=14` | apparent fishing events in a region |
-| `POST /api/zones` `{name, polygon:[[lon,lat],…]}` | create a geofence |
+| `POST /api/zones` `{name, polygon:[[lon,lat],…]}` | create a geofence (persisted) |
 | `DELETE /api/zones?id=` | remove a geofence |
+| `GET/POST/DELETE /api/watchlist` | manage watched MMSIs/IMOs/names |
+| `GET /api/history?ts=<unix\|rfc3339>` | recorded positions nearest to a time (replay) |
 
 ## Configuration
 
 `config.toml` is created from `config.example.toml` on first run; every section
-is optional. Key knobs: `[aoi]` (where the map opens), `[fusion]` (association
-gate, alert timings, trail length), `[sources.*]`, `[gfw]`, `[server]`.
-Environment overrides: `OS_PORT`, `OS_HOST`, `OS_SIM`, `GFW_API_TOKEN`.
+is optional. Key knobs: `[aoi]` (opening view), `[fusion]` (association gate,
+alert timings, collision limits, track cap), `[storage]` (data dir, position
+recording + retention), `[alerts]` (webhook/Telegram delivery), `[watchlist]`,
+`[sources.*]`, `[gfw]`, `[server]`.
+
+Environment overrides (`.env` or the process environment): `OS_PORT`,
+`OS_HOST`, `OS_SIM`, `GFW_API_TOKEN`, `AISSTREAM_API_KEY`, `OS_API_TOKEN`,
+`OS_ALERT_WEBHOOK`, `OS_TELEGRAM_BOT_TOKEN`, `OS_TELEGRAM_CHAT_ID`.
+Precedence is config file < environment < explicit CLI flag.
+
+### Security
+
+By default the server binds to `127.0.0.1` with no authentication — fine for
+local use. Before sharing on a network, set a token:
+
+```toml
+[server]
+api_token = "long-random-string"
+```
+
+Every API and WebSocket request then needs it (`Authorization: Bearer …`; the
+web UI prompts once and remembers). Startup refuses nothing but warns loudly
+if a non-loopback bind has no token.
 
 ## Tests
 
@@ -302,8 +363,12 @@ cargo test
 ```
 
 Covers AIS encode/decode round-trips (class A positions, static data, class B,
-multi-fragment assembly), NMEA parsing (GGA/RMC/TLL/TTM), great-circle maths,
-point-in-polygon, LiDAR JSON ingest and GFW response parsing.
+multi-fragment assembly), NMEA parsing (GGA/RMC/TLL/TTM incl. CPA/TCPA),
+watchlist matching, label classification, severity ordering, persistence
+(atomic writes, history pruning), webhook payload shape, great-circle maths,
+point-in-polygon, LiDAR JSON ingest and GFW response parsing (identity,
+insights, multi-dataset events). CI runs fmt + clippy `-D warnings` + tests on
+every push, and a tagged release builds and attaches the Windows exe.
 
 ## Legal and ethical use
 
@@ -330,7 +395,9 @@ src/
   store.rs        track store and JSON snapshot
   fusion.rs       association, corroboration, dark/AIS-lost/zone alerts
   gfw.rs          Global Fishing Watch client with cache
-  server.rs       axum REST + WebSocket + embedded UI
+  persist.rs      atomic JSON state, JSONL logs, history retention
+  notify.rs       out-of-band alert delivery (webhooks, Telegram)
+  server.rs       axum REST + WebSocket (viewport-filtered) + embedded UI
   sources/        ingest router, TCP/UDP feeds, traffic simulator
 ui/               MapLibre dark map UI (embedded into the exe)
 ```

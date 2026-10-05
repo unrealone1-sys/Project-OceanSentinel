@@ -21,6 +21,38 @@ use serde_json::{json, Value};
 use crate::config::GfwCfg;
 use crate::model::GfwEvent;
 
+/// GFW event datasets, keyed by the `types` value the API expects.
+pub const EVENT_DATASETS: &[(&str, &str)] = &[
+    ("FISHING", "public-global-fishing-events:latest"),
+    ("ENCOUNTER", "public-global-encounters-events:latest"),
+    ("LOITERING", "public-global-loitering-events:latest"),
+    ("GAP", "public-global-gaps-events:latest"),
+    ("PORT_VISIT", "public-global-port-visits-events:latest"),
+];
+
+/// Map requested event types to datasets, ignoring unknown names. An empty
+/// request means "fishing", which is the historical default.
+pub fn datasets_for(types: &[String]) -> (Vec<String>, Vec<String>) {
+    let wanted: Vec<String> = if types.is_empty() {
+        vec!["FISHING".to_string()]
+    } else {
+        types.iter().map(|t| t.to_ascii_uppercase()).collect()
+    };
+    let mut datasets = Vec::new();
+    let mut accepted = Vec::new();
+    for (name, dataset) in EVENT_DATASETS {
+        if wanted.iter().any(|w| w == name) {
+            datasets.push(dataset.to_string());
+            accepted.push(name.to_string());
+        }
+    }
+    if datasets.is_empty() {
+        datasets.push(EVENT_DATASETS[0].1.to_string());
+        accepted.push("FISHING".to_string());
+    }
+    (datasets, accepted)
+}
+
 pub struct GfwClient {
     http: reqwest::Client,
     base: String,
@@ -83,7 +115,12 @@ impl GfwClient {
         }
     }
 
-    async fn request(&self, method: reqwest::Method, url: &str, body: Option<Value>) -> Result<Value> {
+    async fn request(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        body: Option<Value>,
+    ) -> Result<Value> {
         let token = self
             .token
             .clone()
@@ -162,42 +199,52 @@ impl GfwClient {
             "endDate": format!("{}T00:00:00.000Z", end + chrono::Duration::days(1)),
         });
         let url = format!("{}/v3/insights/vessels", self.base);
-        let v = self.request(reqwest::Method::POST, &url, Some(body)).await?;
+        let v = self
+            .request(reqwest::Method::POST, &url, Some(body))
+            .await?;
         self.cache_put(&key, &v);
         Ok(v)
     }
 
-    /// Apparent fishing events inside a bounding box, for the map layer.
-    pub async fn fishing_events_bbox(
+    /// Apparent activity events inside a bounding box, for the map layer.
+    /// `types` selects which datasets to query (see `EVENT_DATASETS`).
+    pub async fn events_bbox(
         &self,
         bbox: [f64; 4],
         days: i64,
         limit: u32,
-    ) -> Result<(Vec<GfwEvent>, Value)> {
+        types: &[String],
+    ) -> Result<(Vec<GfwEvent>, Value, Vec<String>)> {
         let days = days.clamp(1, 365);
         let limit = limit.clamp(1, 500);
         let [w, s, e, n] = bbox;
-        let key = format!("events:{w:.3},{s:.3},{e:.3},{n:.3}:{days}:{limit}");
+        let (datasets, accepted) = datasets_for(types);
+        let key = format!(
+            "events:{w:.3},{s:.3},{e:.3},{n:.3}:{days}:{limit}:{}",
+            accepted.join("+")
+        );
         if let Some(v) = self.cache_get(&key) {
-            return Ok((parse_events(&v), v));
+            return Ok((parse_events(&v), v, accepted));
         }
         let end = Utc::now().date_naive();
         let start = end - chrono::Duration::days(days);
         let body = json!({
-            "datasets": ["public-global-fishing-events:latest"],
+            "datasets": datasets,
             "startDate": start.to_string(),
             "endDate": (end + chrono::Duration::days(1)).to_string(),
             "geometry": {
                 "type": "Polygon",
                 "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]
             },
-            "types": ["FISHING"],
+            "types": accepted,
             "limit": limit,
         });
         let url = format!("{}/v3/events?limit={}&offset=0", self.base, limit);
-        let v = self.request(reqwest::Method::POST, &url, Some(body)).await?;
+        let v = self
+            .request(reqwest::Method::POST, &url, Some(body))
+            .await?;
         self.cache_put(&key, &v);
-        Ok((parse_events(&v), v))
+        Ok((parse_events(&v), v, accepted))
     }
 }
 
@@ -253,7 +300,9 @@ pub fn parse_events(v: &Value) -> Vec<GfwEvent> {
 pub fn summarize_search_entry(input: &Value) -> Value {
     let entry = input.pointer("/entries/0").unwrap_or(input);
     let sri = entry.pointer("/selfReportedInfo/0").unwrap_or(&Value::Null);
-    let combined = entry.pointer("/combinedSourcesInfo/0").unwrap_or(&Value::Null);
+    let combined = entry
+        .pointer("/combinedSourcesInfo/0")
+        .unwrap_or(&Value::Null);
     let registry = entry.pointer("/registryInfo/0").unwrap_or(&Value::Null);
     let owner = entry.pointer("/registryOwners/0").unwrap_or(&Value::Null);
 
@@ -319,7 +368,10 @@ pub fn summarize_insights(v: &Value) -> Value {
         .get("periodSelectedCounters")
         .cloned()
         .unwrap_or(Value::Null);
-    let iuu = identity.get("iuuVesselList").cloned().unwrap_or(Value::Null);
+    let iuu = identity
+        .get("iuuVesselList")
+        .cloned()
+        .unwrap_or(Value::Null);
     let flags_changes = identity.get("flagsChanges").cloned().unwrap_or(Value::Null);
     json!({
         "fishing_events": counters.get("events").and_then(|x| x.as_u64()),
@@ -358,7 +410,9 @@ fn pct(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{b:02X}")),
         }
     }
@@ -377,6 +431,30 @@ fn truncate(s: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_dataset_selection() {
+        // default is fishing
+        let (ds, accepted) = datasets_for(&[]);
+        assert_eq!(accepted, vec!["FISHING"]);
+        assert_eq!(ds, vec!["public-global-fishing-events:latest"]);
+
+        // multiple types, case-insensitive, unknown names ignored
+        let (ds, accepted) = datasets_for(&[
+            "fishing".to_string(),
+            "encounter".to_string(),
+            "gap".to_string(),
+            "bogus".to_string(),
+        ]);
+        assert_eq!(accepted, vec!["FISHING", "ENCOUNTER", "GAP"]);
+        assert_eq!(ds.len(), 3);
+        assert!(ds.iter().any(|d| d.contains("encounters")));
+
+        // all-unknown falls back to fishing rather than querying nothing
+        let (ds, accepted) = datasets_for(&["nonsense".to_string()]);
+        assert_eq!(accepted, vec!["FISHING"]);
+        assert_eq!(ds.len(), 1);
+    }
 
     #[test]
     fn parses_event_entries() {
@@ -434,7 +512,10 @@ mod tests {
         assert_eq!(s["ais_gap_events"], 3);
         assert_eq!(s["ais_off_periods"], 2);
         assert_eq!(s["flag_changes"], 1);
-        assert_eq!(s["iuu_listed"], false, "an object with zero listings must not be reported as listed");
+        assert_eq!(
+            s["iuu_listed"], false,
+            "an object with zero listings must not be reported as listed"
+        );
         assert!((s["ais_coverage_percentage"].as_f64().unwrap() - 76.4).abs() < 0.01);
     }
 
@@ -445,9 +526,10 @@ mod tests {
         )
         .unwrap();
         assert!(iuu_listed(&listed));
-        let clear: Value =
-            serde_json::from_str(r#"{"totalTimesListed":0,"totalTimesListedInThePeriod":0,"valuesInThePeriod":[]}"#)
-                .unwrap();
+        let clear: Value = serde_json::from_str(
+            r#"{"totalTimesListed":0,"totalTimesListedInThePeriod":0,"valuesInThePeriod":[]}"#,
+        )
+        .unwrap();
         assert!(!iuu_listed(&clear));
         assert!(!iuu_listed(&Value::Null));
         let missing: Value = serde_json::from_str(r#"{}"#).unwrap();

@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Tests
+        run: cargo test --all-targets
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Stage artifacts
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/oceansentinel.exe dist/
+          cp config.example.toml dist/
+          cat > dist/README-quickstart.txt <<'EOF'
+          OceanSentinel — quick start
+          ===========================
+          1. Put oceansentinel.exe and config.example.toml in one folder.
+          2. Rename config.example.toml to config.toml (it is created automatically
+             on first run if you skip this step).
+          3. Optional but recommended: create a .env file next to the exe with
+                AISSTREAM_API_KEY=...   (free, https://aisstream.io)  -> live global AIS
+                GFW_API_TOKEN=...       (free, https://globalfishingwatch.org/our-apis/tokens)
+          4. Run oceansentinel.exe — the map opens at http://127.0.0.1:8787
+          With no keys it runs the built-in simulator so you can explore safely.
+          EOF
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: oceansentinel-windows
+          path: dist/*
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

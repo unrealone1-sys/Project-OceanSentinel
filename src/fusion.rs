@@ -8,6 +8,7 @@
 //!    contact alert (a vessel that is physically present but not on AIS).
 //!  * AIS tracks that fall silent raise an AIS-lost alert.
 //!  * Zone entry/exit transitions raise geofence alerts.
+//!
 //! A full state snapshot is broadcast every tick for the live map.
 
 use std::collections::{HashMap, HashSet};
@@ -15,14 +16,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use serde_json::json;
+use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use tracing::debug;
 
 use crate::ais::AisBody;
-use crate::config::FusionCfg;
+use crate::config::{FusionCfg, StorageCfg};
 use crate::geo;
 use crate::model::*;
+use crate::persist;
 use crate::sources::{Event, RelativeTarget};
 use crate::store::{SnapshotMeta, Store};
 
@@ -34,6 +36,15 @@ struct Cand {
     track_id: String,
     lat: f64,
     lon: f64,
+}
+
+/// Long-lived handles the fusion engine needs.
+pub struct FusionDeps {
+    pub store: Arc<RwLock<Store>>,
+    pub bcast: broadcast::Sender<crate::server::ServerMsg>,
+    /// Alerts are also handed here for out-of-band delivery + the alert log.
+    pub notify: mpsc::UnboundedSender<Alert>,
+    pub paths: persist::Paths,
 }
 
 fn mk_alert(
@@ -73,7 +84,7 @@ fn cooldown_ok(
 
 pub struct Fusion {
     store: Arc<RwLock<Store>>,
-    bcast: broadcast::Sender<String>,
+    bcast: broadcast::Sender<crate::server::ServerMsg>,
     cfg: FusionCfg,
     meta: SnapshotMeta,
     own: Option<OwnShipFix>,
@@ -82,18 +93,24 @@ pub struct Fusion {
     zone_occ: HashSet<(String, String)>,
     sensor_seq: u64,
     ticks: u64,
+    notify: mpsc::UnboundedSender<Alert>,
+    /// "entry_id:track_id" pairs already alerted, so a watchlist hit fires once.
+    watch_hit: HashSet<String>,
+    /// Feeds currently known to be silent.
+    stalled: HashSet<String>,
+    paths: persist::Paths,
+    record: bool,
+    record_interval_s: u64,
+    retention_days: u32,
+    last_record: DateTime<Utc>,
+    last_prune_day: String,
 }
 
 impl Fusion {
-    pub fn new(
-        store: Arc<RwLock<Store>>,
-        bcast: broadcast::Sender<String>,
-        cfg: FusionCfg,
-        meta: SnapshotMeta,
-    ) -> Self {
+    pub fn new(deps: FusionDeps, cfg: FusionCfg, meta: SnapshotMeta, storage: &StorageCfg) -> Self {
         Fusion {
-            store,
-            bcast,
+            store: deps.store,
+            bcast: deps.bcast,
             cfg,
             meta,
             own: None,
@@ -102,6 +119,15 @@ impl Fusion {
             zone_occ: HashSet::new(),
             sensor_seq: 0,
             ticks: 0,
+            notify: deps.notify,
+            watch_hit: HashSet::new(),
+            stalled: HashSet::new(),
+            paths: deps.paths,
+            record: storage.record_tracks,
+            record_interval_s: storage.record_interval_s.max(10),
+            retention_days: storage.retention_days.max(1),
+            last_record: Utc::now(),
+            last_prune_day: String::new(),
         }
     }
 
@@ -142,8 +168,11 @@ impl Fusion {
         let mut st = self.store.write().await;
         for a in &alerts {
             st.push_alert(a.clone());
-            let msg = json!({"type": "alert", "alert": a}).to_string();
-            let _ = self.bcast.send(msg);
+            let _ = self.bcast.send(crate::server::ServerMsg::Alert(
+                serde_json::to_value(a).unwrap_or(Value::Null),
+            ));
+            // out-of-band delivery + on-disk alert log (the notify task owns both)
+            let _ = self.notify.send(a.clone());
         }
     }
 
@@ -270,6 +299,13 @@ impl Fusion {
                         t.cog = c.cog_deg;
                         t.heading = None;
                     }
+                    // Closest-approach data only arrives from target trackers.
+                    if c.cpa_m.is_some() {
+                        t.cpa_m = c.cpa_m;
+                    }
+                    if c.tcpa_min.is_some() {
+                        t.tcpa_min = c.tcpa_min;
+                    }
                 }
                 t.add_source(c.source);
                 t.last_sensor_contact = Some(c.ts);
@@ -341,6 +377,8 @@ impl Fusion {
             bearing_deg: Some(rt.bearing_deg),
             sog_kn: rt.speed_kn.map(|v| v as f32),
             cog_deg: rt.course_deg.map(|v| v as f32),
+            cpa_m: rt.cpa_m,
+            tcpa_min: rt.tcpa_min,
             confidence: 0.75,
             ts: rt.ts,
         };
@@ -377,7 +415,7 @@ impl Fusion {
                     .iter()
                     .map(|(id, t)| (id.clone(), (now - t.last_seen).num_seconds()))
                     .collect();
-                ages.sort_by(|a, b| b.1.cmp(&a.1));
+                ages.sort_by_key(|a| std::cmp::Reverse(a.1));
                 for (id, _) in ages.iter().take(st.tracks.len() - max_tracks) {
                     st.tracks.remove(id);
                 }
@@ -398,13 +436,10 @@ impl Fusion {
                     .last_ais
                     .map(|a| (now - a).num_seconds())
                     .unwrap_or(i64::MAX);
-                let label = t
-                    .name
-                    .clone()
-                    .unwrap_or_else(|| match t.mmsi {
-                        Some(m) => format!("MMSI {m}"),
-                        None => t.id.clone(),
-                    });
+                let label = t.name.clone().unwrap_or_else(|| match t.mmsi {
+                    Some(m) => format!("MMSI {m}"),
+                    None => t.id.clone(),
+                });
                 if t.dark && age >= dark_after && since_seen < stale_after {
                     let sensors: Vec<&str> =
                         t.sensor_sources().iter().map(|s| s.as_str()).collect();
@@ -465,6 +500,150 @@ impl Fusion {
                     });
                 }
             }
+            // 3b. watchlist hits — the whole point of a watchlist is not having
+            // to stare at the map, so these are high severity.
+            let entries = st.watchlist.clone();
+            if !entries.is_empty() {
+                let mut hits: Vec<(String, String, String, f64, f64, Option<String>)> = Vec::new();
+                for t in st.tracks.values() {
+                    for e in &entries {
+                        if e.matches_track(t) {
+                            hits.push((
+                                e.id.clone(),
+                                e.label(),
+                                t.id.clone(),
+                                t.lat,
+                                t.lon,
+                                e.note.clone(),
+                            ));
+                        }
+                    }
+                }
+                for (eid, label, tid, lat, lon, note) in hits {
+                    if self.watch_hit.insert(format!("{eid}:{tid}")) {
+                        let shown = st
+                            .tracks
+                            .get(&tid)
+                            .and_then(|t| t.name.clone())
+                            .unwrap_or_else(|| tid.clone());
+                        let msg = match note.filter(|n| !n.trim().is_empty()) {
+                            Some(n) => format!(
+                                "WATCHLIST HIT — {label} ({n}) is on the map as \"{shown}\" at {lat:.4}, {lon:.4}"
+                            ),
+                            None => format!(
+                                "WATCHLIST HIT — {label} is on the map as \"{shown}\" at {lat:.4}, {lon:.4}"
+                            ),
+                        };
+                        cands.push(Cand {
+                            key: format!("watch:{eid}:{tid}"),
+                            kind: "watchlist_hit",
+                            severity: "high",
+                            message: msg,
+                            track_id: tid,
+                            lat,
+                            lon,
+                        });
+                    }
+                }
+                // forget hits for deleted entries so re-adding arms them again
+                let live: HashSet<String> = entries.iter().map(|e| e.id.clone()).collect();
+                self.watch_hit.retain(|k| {
+                    k.split(':')
+                        .next()
+                        .map(|eid| live.contains(eid))
+                        .unwrap_or(false)
+                });
+            }
+
+            // 3c. collision risk from target-tracker CPA/TCPA (only fresh data)
+            for t in st.tracks.values() {
+                let (Some(cpa), Some(tcpa)) = (t.cpa_m, t.tcpa_min) else {
+                    continue;
+                };
+                let fresh = t
+                    .last_sensor_contact
+                    .map(|s| (now - s).num_seconds() <= 60)
+                    .unwrap_or(false);
+                if !fresh {
+                    continue;
+                }
+                if cpa <= self.cfg.collision_cpa_m
+                    && (0.0..=self.cfg.collision_tcpa_min).contains(&tcpa)
+                {
+                    let label = t.name.clone().unwrap_or_else(|| t.id.clone());
+                    cands.push(Cand {
+                        key: format!("collision:{}", t.id),
+                        kind: "collision_risk",
+                        severity: "high",
+                        message: format!(
+                            "COLLISION RISK {label}: closest approach {cpa:.0} m in {tcpa:.1} min at {:.4}, {:.4}",
+                            t.lat, t.lon
+                        ),
+                        track_id: t.id.clone(),
+                        lat: t.lat,
+                        lon: t.lon,
+                    });
+                }
+            }
+
+            // 3d. feeds that are connected but have gone quiet (a stale map
+            // looks identical to a quiet ocean, so this matters)
+            let stall_after = self.cfg.feed_stall_after_s;
+            let mut stalled_now: HashSet<String> = HashSet::new();
+            for (name, f) in &st.feeds {
+                if f.state != "connected" {
+                    continue;
+                }
+                let age = f.last_line.map(|l| (now - l).num_seconds()).unwrap_or(0);
+                if age >= stall_after {
+                    stalled_now.insert(name.clone());
+                }
+            }
+            let (aoi_lat, aoi_lon) = (self.meta.aoi.center_lat, self.meta.aoi.center_lon);
+            let mut feed_events: Vec<(String, bool, i64)> = Vec::new();
+            for name in &stalled_now {
+                if !self.stalled.contains(name) {
+                    let age = st
+                        .feeds
+                        .get(name)
+                        .and_then(|f| f.last_line)
+                        .map(|l| (now - l).num_seconds())
+                        .unwrap_or(0);
+                    feed_events.push((name.clone(), true, age));
+                }
+            }
+            for name in self.stalled.iter() {
+                if !stalled_now.contains(name) {
+                    feed_events.push((name.clone(), false, 0));
+                }
+            }
+            self.stalled = stalled_now;
+            for (name, down, age) in feed_events {
+                if down {
+                    cands.push(Cand {
+                        key: format!("feeddown:{name}"),
+                        kind: "feed_stalled",
+                        severity: "medium",
+                        message: format!(
+                            "FEED SILENT — {name} is connected but sent nothing for {age}s; the picture may be stale"
+                        ),
+                        track_id: String::new(),
+                        lat: aoi_lat,
+                        lon: aoi_lon,
+                    });
+                } else {
+                    cands.push(Cand {
+                        key: format!("feedup:{name}"),
+                        kind: "feed_recovered",
+                        severity: "info",
+                        message: format!("feed recovered — {name} is streaming again"),
+                        track_id: String::new(),
+                        lat: aoi_lat,
+                        lon: aoi_lon,
+                    });
+                }
+            }
+
             for c in cands {
                 if cooldown_ok(&mut self.cooldown, cooldown_s, &c.key, now) {
                     pending.push(mk_alert(
@@ -517,13 +696,51 @@ impl Fusion {
                 }
             }
 
+            // 5. optional position history (enables the replay scrubber)
+            if self.record
+                && (now - self.last_record).num_seconds() >= self.record_interval_s as i64
+            {
+                self.last_record = now;
+                let day = persist::day_key(now);
+                if day != self.last_prune_day {
+                    self.last_prune_day = day.clone();
+                    persist::prune_history(&self.paths.history, self.retention_days);
+                }
+                let mut body = String::new();
+                for t in st.tracks.values() {
+                    let p = persist::HistoryPoint {
+                        ts: now,
+                        id: t.id.clone(),
+                        mmsi: t.mmsi,
+                        name: t.name.clone(),
+                        lat: t.lat,
+                        lon: t.lon,
+                        sog: t.sog,
+                        cog: t.cog,
+                        dark: t.dark,
+                        class: t.classification.clone(),
+                    };
+                    if let Ok(line) = serde_json::to_string(&p) {
+                        body.push_str(&line);
+                        body.push('\n');
+                    }
+                }
+                if !body.is_empty() {
+                    persist::append_raw(&self.paths.history_day(&day), &body);
+                }
+            }
+
             // 4. broadcast the state snapshot (trails shrink and the cadence
             // slows as the picture grows, so a worldwide view stays workable)
+            // Trails cost payload (points x tracks) every tick, so the budget
+            // shrinks as the picture grows — but never to zero: a zoomed-in
+            // client still wants a track's recent history, and per-connection
+            // filtering drops the trails entirely for whole-world views.
             let n = st.tracks.len();
             self.meta.trail_limit = if n > 1500 {
-                0
+                30
             } else if n > 400 {
-                20
+                45
             } else {
                 self.cfg.snapshot_trail
             };
@@ -535,9 +752,9 @@ impl Fusion {
             } else {
                 1
             };
-            if self.ticks % stride == 0 {
-                let snap = st.snapshot(&self.meta).to_string();
-                let _ = self.bcast.send(snap);
+            if self.ticks.is_multiple_of(stride) {
+                let snap = Arc::new(st.snapshot(&self.meta));
+                let _ = self.bcast.send(crate::server::ServerMsg::State(snap));
             }
         }
         self.zone_occ = occupancy;

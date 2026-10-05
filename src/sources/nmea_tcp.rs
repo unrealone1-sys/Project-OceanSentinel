@@ -63,7 +63,7 @@ pub fn spawn(
                                 &name,
                                 "tcp",
                                 "connected",
-                                format!("{addr}"),
+                                addr.to_string(),
                                 lines_total,
                                 pps,
                             )));

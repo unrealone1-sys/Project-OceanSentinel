@@ -183,7 +183,7 @@ pub fn decode(payload: &str, fill: u8) -> Option<AisBody> {
     let _repeat = b.u(2)?;
     let mmsi = b.u(30)? as u32;
     match msg_type {
-        1 | 2 | 3 => {
+        1..=3 => {
             let nav_status = b.u(4)? as u8;
             let _rot = b.i(8)?;
             let sog = scale_opt(b.u(10)?, 10.0, 1023);
@@ -269,8 +269,16 @@ pub fn decode(payload: &str, fill: u8) -> Option<AisBody> {
                 imo: if imo == 0 { None } else { Some(imo as u32) },
                 callsign: callsign.filter(|s| !s.is_empty()),
                 name: name.filter(|s| !s.is_empty()),
-                ship_type: if ship_type == 0 { None } else { Some(ship_type) },
-                length: if bow + stern > 0 { Some(bow + stern) } else { None },
+                ship_type: if ship_type == 0 {
+                    None
+                } else {
+                    Some(ship_type)
+                },
+                length: if bow + stern > 0 {
+                    Some(bow + stern)
+                } else {
+                    None
+                },
                 beam: if port + starboard > 0 {
                     Some(port + starboard)
                 } else {
@@ -302,9 +310,17 @@ pub fn decode(payload: &str, fill: u8) -> Option<AisBody> {
                 let starboard = b.u(6)? as u16;
                 Some(AisBody::StaticB {
                     mmsi,
-                    ship_type: if ship_type == 0 { None } else { Some(ship_type) },
+                    ship_type: if ship_type == 0 {
+                        None
+                    } else {
+                        Some(ship_type)
+                    },
                     callsign: callsign.filter(|s| !s.is_empty()),
-                    length: if bow + stern > 0 { Some(bow + stern) } else { None },
+                    length: if bow + stern > 0 {
+                        Some(bow + stern)
+                    } else {
+                        None
+                    },
                     beam: if port + starboard > 0 {
                         Some(port + starboard)
                     } else {
@@ -389,7 +405,11 @@ pub fn body_from_json(v: &serde_json::Value) -> Option<AisBody> {
                 lat: Some(lat),
                 lon: Some(lon),
                 maneuver: None,
-                class_b: v.get("type").and_then(|x| x.as_u64()).map(|t| t == 18 || t == 19).unwrap_or(false),
+                class_b: v
+                    .get("type")
+                    .and_then(|x| x.as_u64())
+                    .map(|t| t == 18 || t == 19)
+                    .unwrap_or(false),
             });
         }
     }
@@ -519,9 +539,7 @@ impl BitWriter {
 
 pub fn armor(bits: &[u8], fill: u8) -> String {
     let mut b = bits.to_vec();
-    for _ in 0..fill {
-        b.push(0);
-    }
+    b.resize(b.len() + fill as usize, 0);
     let mut out = String::with_capacity(b.len() / 6 + 1);
     for chunk in b.chunks(6) {
         let mut v = 0u8;
@@ -602,7 +620,7 @@ pub fn encode_static_a(
     w.u((draught * 10.0).round() as u64, 8);
     w.text(destination, 20);
     w.u(0, 1); // DTE
-    // pad to 424 bits as real stations do; spare bits carry no information
+               // pad to 424 bits as real stations do; spare bits carry no information
     while w.bits.len() < 424 {
         w.bits.push(0);
     }
@@ -732,10 +750,7 @@ mod tests {
         let line = encode_class_b_position(232012345, 36.1, -5.4, 6.2, 180.5, 181.0);
         match through_pipeline(&line) {
             AisBody::Position {
-                mmsi,
-                class_b,
-                cog,
-                ..
+                mmsi, class_b, cog, ..
             } => {
                 assert_eq!(mmsi, 232012345);
                 assert!(class_b);
@@ -747,7 +762,19 @@ mod tests {
 
     #[test]
     fn multi_part_assembly() {
-        let line = encode_static_a(1, 0, "AB", "TWO PART SHIP", 70, 50, 20, 8, 8, "ROTTERDAM", 9.9);
+        let line = encode_static_a(
+            1,
+            0,
+            "AB",
+            "TWO PART SHIP",
+            70,
+            50,
+            20,
+            8,
+            8,
+            "ROTTERDAM",
+            9.9,
+        );
         let s = nmea::parse(&line).unwrap();
         let payload = s.fields[4].clone();
         let (a, b) = payload.split_at(payload.len() / 2);
@@ -762,7 +789,9 @@ mod tests {
         let (payload, fill) = asm.push(&nmea::parse(&p2).unwrap()).expect("assembled");
         assert_eq!(fill, 2);
         match decode(&payload, fill).unwrap() {
-            AisBody::StaticA { name, ship_type, .. } => {
+            AisBody::StaticA {
+                name, ship_type, ..
+            } => {
                 assert_eq!(name.as_deref(), Some("TWO PART SHIP"));
                 assert_eq!(ship_type, Some(70));
             }

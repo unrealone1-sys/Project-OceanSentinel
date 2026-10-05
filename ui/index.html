@@ -23,6 +23,7 @@
     <nav class="tabs">
       <button class="tab active" data-tab="tracks">TRACKS</button>
       <button class="tab" data-tab="alerts">ALERTS <span class="badge" id="alert-badge">0</span></button>
+      <button class="tab" data-tab="watch">WATCH</button>
       <button class="tab" data-tab="layers">LAYERS</button>
       <button class="tab" data-tab="gfw">GFW</button>
     </nav>
@@ -30,6 +31,22 @@
     <section class="panel active" id="panel-tracks">
       <input id="search" placeholder="search name, MMSI, class…" autocomplete="off" />
       <div class="filters" id="filters"></div>
+      <div class="toolrow">
+        <select id="class-filter" title="filter by vessel class">
+          <option value="">all classes</option>
+          <option value="fishing">fishing / sailing</option>
+          <option value="cargo">cargo / tanker / tug</option>
+          <option value="passenger">passenger / patrol / SAR</option>
+          <option value="other">other / unknown</option>
+        </select>
+        <select id="sort-by" title="sort order">
+          <option value="dark">sort: alerts first</option>
+          <option value="distance">sort: nearest to view</option>
+          <option value="speed">sort: fastest</option>
+          <option value="name">sort: name</option>
+        </select>
+        <label class="check tiny-check"><input type="checkbox" id="in-view" /> in view only</label>
+      </div>
       <div class="list-head">
         <span id="track-count">0 tracks</span>
         <button class="btn tiny ghost" id="export-geojson">EXPORT</button>
@@ -74,24 +91,57 @@
       </div>
     </section>
 
+    <section class="panel" id="panel-watch">
+      <p class="hint">Watchlist hits raise a high-severity alert — in the UI and to any configured
+        webhook or Telegram destination. Match by MMSI, IMO, or an exact vessel name.</p>
+      <div class="field-group">
+        <div class="group-title">ADD TO WATCHLIST</div>
+        <input id="watch-input" placeholder="MMSI, IMO 9123456, or exact name" autocomplete="off" />
+        <input id="watch-note" placeholder="note (optional, e.g. IUU-listed)" autocomplete="off" />
+        <button class="btn" id="watch-add">WATCH FOR THIS</button>
+      </div>
+      <div class="list-head"><span id="watch-count">0 watched</span></div>
+      <div id="watch-list" class="mini-list"></div>
+    </section>
+
     <section class="panel" id="panel-gfw">
       <p class="hint" id="gfw-hint"></p>
       <div class="field-group">
+        <div class="group-title">EVENT TYPES</div>
+        <label class="check"><input type="checkbox" data-event="FISHING" checked /> apparent fishing</label>
+        <label class="check"><input type="checkbox" data-event="ENCOUNTER" checked /> encounters (transshipment)</label>
+        <label class="check"><input type="checkbox" data-event="LOITERING" checked /> loitering</label>
+        <label class="check"><input type="checkbox" data-event="GAP" checked /> AIS gaps</label>
+        <label class="check"><input type="checkbox" data-event="PORT_VISIT" checked /> port visits</label>
+        <div id="gfw-legend" class="feed-legend"></div>
+      </div>
+      <div class="field-group">
         <div class="group-title">REGION QUERY</div>
-        <button class="btn" id="gfw-query">FISHING EVENTS IN VIEW (14d)</button>
-        <button class="btn" id="gfw-query-global">GLOBAL FISHING EVENTS (7d)</button>
+        <button class="btn" id="gfw-query">EVENTS IN VIEW (14d)</button>
+        <button class="btn" id="gfw-query-global">GLOBAL EVENTS (7d)</button>
         <button class="btn ghost" id="gfw-clear">CLEAR EVENTS</button>
-        <div id="gfw-status" class="hint">Click a fishing-event dot on the map to pull that vessel's GFW record.</div>
+        <div id="gfw-status" class="hint">Click an event dot on the map to pull that vessel's GFW record.</div>
       </div>
       <div class="field-group">
         <div class="group-title">VESSEL LOOKUP</div>
         <input id="gfw-lookup" placeholder="MMSI / IMO / name" autocomplete="off" />
         <button class="btn" id="gfw-lookup-btn">LOOK UP VESSEL</button>
       </div>
+      <div class="field-group">
+        <div class="group-title">REPLAY</div>
+        <button class="btn ghost" id="replay-start">LOAD LAST HOUR</button>
+        <div class="hint">Requires <code>[storage] record_tracks = true</code> in config.toml.</div>
+      </div>
     </section>
   </aside>
 
   <main id="map"></main>
+
+  <div id="replaybar" class="hidden">
+    <span id="replay-label" class="mini">REPLAY</span>
+    <input type="range" id="replay-slider" min="0" max="100" value="100" step="1" />
+    <button class="btn tiny" id="replay-live">LIVE</button>
+  </div>
 
   <div id="legend">
     <div><i style="background:#22d3ee"></i> AIS</div>
