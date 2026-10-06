@@ -930,10 +930,16 @@ function connect() {
     state.wsOk = true;
     chip('chip-ws', 'WS LIVE', 'ok');
     sendViewport(ws);
+    pageProgress(0.25);
   };
   ws.onclose = () => {
     state.wsOk = false;
     chip('chip-ws', 'WS DOWN', 'bad');
+    const pp = document.getElementById('page-progress');
+    if (pp) {
+      pp.classList.remove('hidden');
+      pageProgress(0.05);
+    }
     setTimeout(connect, 2000);
   };
   ws.onerror = () => ws.close();
@@ -950,6 +956,15 @@ function connect() {
 }
 
 function applyState(msg) {
+  bootFirstState = true;
+  const pp = document.getElementById('page-progress');
+  if (pp && !pp.classList.contains('hidden')) {
+    pageProgress(1);
+    setTimeout(() => {
+      const p = document.getElementById('page-progress');
+      if (p) p.classList.add('hidden');
+    }, 600);
+  }
   state.tracks = new Map((msg.tracks || []).map((t) => [t.id, t]));
   state.alerts = msg.alerts || [];
   state.zones = msg.zones || [];
@@ -1768,4 +1783,99 @@ setInterval(() => {
 window.__map = map;
 window.__osState = state;
 
+/* ------------------------------------------------ boot intro controller */
+
+const BOOT_MESSAGES = [
+  'INITIALIZING MAP ENGINE',
+  'ESTABLISHING AIS UPLINK',
+  'CALIBRATING SONAR · LIDAR ARRAYS',
+  'LOADING COASTLINE DATABASE',
+  'CONNECTING GLOBAL FISHING WATCH',
+  'ARMING ALERT ENGINE',
+  'SYNCING LIVE TRACK PICTURE',
+];
+
+let bootDone = false;
+let bootState = 0;
+let bootFirstState = false;
+
+/// Slim loading strip along the top edge (mirrors boot %, then WS state).
+function pageProgress(frac) {
+  const el = document.getElementById('page-progress');
+  if (el) el.style.width = `${Math.round(frac * 100)}%`;
+}
+
+function bootFinish() {
+  if (bootDone) return;
+  bootDone = true;
+  try {
+    sessionStorage.setItem('os.boot', '1');
+  } catch (e) {
+    /* ignore */
+  }
+  const el = document.getElementById('boot');
+  if (el) {
+    el.classList.add('boot-done');
+    setTimeout(() => el.remove(), 900);
+  }
+  document.removeEventListener('keydown', bootSkip);
+  document.removeEventListener('click', bootSkip);
+}
+
+function bootSkip() {
+  bootState = Math.max(bootState, 97);
+}
+
+function runBoot() {
+  const el = document.getElementById('boot');
+  if (!el) return;
+  let fast = false;
+  try {
+    fast = sessionStorage.getItem('os.boot') === '1';
+  } catch (e) {
+    /* ignore */
+  }
+  if (fast) el.classList.add('boot-fast');
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    bootFinish();
+    return;
+  }
+  document.addEventListener('keydown', bootSkip);
+  document.addEventListener('click', bootSkip);
+
+  const fill = document.getElementById('boot-fill');
+  const pct = document.getElementById('boot-pct');
+  const status = document.getElementById('boot-status');
+  const chips = [...el.querySelectorAll('.boot-chips span')];
+  const tickMs = fast ? 16 : 45;
+  const factor = fast ? 0.08 : 0.03;
+  const floor = fast ? 1 : 0.5;
+  let msgIdx = 0;
+
+  const msgTimer = setInterval(() => {
+    if (bootDone || !status) return clearInterval(msgTimer);
+    status.textContent = BOOT_MESSAGES[msgIdx % BOOT_MESSAGES.length];
+    msgIdx += 1;
+  }, fast ? 80 : 560);
+
+  const tick = setInterval(() => {
+    if (bootDone) return clearInterval(tick);
+    // the bar stalls just short of done until real data arrives, so the
+    // animation ends when the map is actually live — never before
+    const cap = bootFirstState ? 100 : (fast ? 80 : 88);
+    bootState = Math.min(cap, bootState + Math.max(floor, (cap - bootState) * factor));
+    if (fill) fill.style.width = `${bootState.toFixed(1)}%`;
+    if (pct) pct.textContent = `${Math.floor(bootState)}%`;
+    pageProgress(bootState / 100);
+    chips.forEach((c, i) => {
+      if (bootState >= (i + 1) * (100 / chips.length) - 8) c.classList.add('on');
+    });
+    if (bootState >= 100) {
+      clearInterval(tick);
+      bootFinish();
+    }
+  }, tickMs);
+}
+
+runBoot();
 connect();

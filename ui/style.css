@@ -386,6 +386,135 @@ pre.json { background: #060b12; border: 1px solid var(--border); border-radius: 
 #stats { margin-left: auto; display: flex; gap: 14px; }
 #stats b { color: var(--text); font-weight: 700; }
 
+/* ---------- boot intro (cinematic opening) ---------- */
+#boot {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: radial-gradient(ellipse at 50% 42%, #07101c 0%, #04070d 68%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: opacity .7s ease;
+  cursor: pointer;
+}
+#boot.boot-done { opacity: 0; pointer-events: none; }
+#boot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, rgba(255,255,255,.02) 0 1px, transparent 1px 3px);
+  pointer-events: none;
+}
+.boot-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 13px;
+  width: min(560px, 86vw);
+}
+.boot-radar {
+  position: relative;
+  width: 132px;
+  height: 132px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(34, 211, 238, .5);
+  box-shadow: 0 0 30px rgba(34, 211, 238, .28), inset 0 0 22px rgba(34, 211, 238, .16);
+}
+.boot-radar::before, .boot-radar::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  border: 1px solid rgba(34, 211, 238, .22);
+}
+.boot-radar::before { inset: 24%; }
+.boot-radar::after { inset: 38%; }
+.boot-sweep {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(from 0deg, rgba(34, 211, 238, .5), rgba(34, 211, 238, 0) 80deg, transparent 360deg);
+  animation: boot-sweep 1.6s linear infinite;
+}
+@keyframes boot-sweep { to { transform: rotate(360deg); } }
+.boot-radar i {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 7px var(--cyan);
+  animation: boot-blip 1.7s infinite;
+}
+.boot-radar .b1 { top: 30%; left: 64%; }
+.boot-radar .b2 { top: 58%; left: 26%; animation-delay: .5s; }
+.boot-radar .b3 { top: 70%; left: 60%; animation-delay: .95s; }
+@keyframes boot-blip { 0%, 26% { opacity: 0; } 9% { opacity: 1; } 100% { opacity: 0; } }
+.boot-title {
+  margin: 6px 0 0;
+  font-size: clamp(26px, 4.6vw, 40px);
+  font-weight: 700;
+  letter-spacing: .34em;
+  text-indent: .34em;
+  color: #eaf7ff;
+  text-shadow: 0 0 18px rgba(34, 211, 238, .55);
+  animation: boot-tighten 1.5s ease-out both;
+}
+@keyframes boot-tighten {
+  from { letter-spacing: .8em; opacity: 0; filter: blur(4px); }
+  to { letter-spacing: .34em; opacity: 1; filter: none; }
+}
+.boot-sub { color: var(--dim); font-size: 10.5px; letter-spacing: .42em; text-indent: .42em; }
+.boot-bar {
+  width: 100%;
+  height: 3px;
+  margin-top: 8px;
+  background: #0a1622;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.boot-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--cyan), #7dd3fc);
+  box-shadow: 0 0 12px rgba(34, 211, 238, .6);
+  transition: width .12s linear;
+}
+.boot-row { width: 100%; display: flex; justify-content: space-between; font-size: 10px; color: var(--dim); }
+#boot-pct { color: var(--cyan); }
+.boot-chips { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
+.boot-chips span {
+  font-size: 8.5px;
+  letter-spacing: .14em;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: #2c3f52;
+  transition: all .35s;
+}
+.boot-chips span.on { color: var(--green); border-color: #1d3a2a; text-shadow: 0 0 6px rgba(74, 222, 128, .5); }
+.boot-skip { margin-top: 8px; font-size: 9px; color: #33506a; letter-spacing: .2em; animation: pulse 2.2s infinite; }
+#boot.boot-fast .boot-radar { animation-duration: .3s; }
+#boot.boot-fast .boot-title { animation-duration: .35s; }
+@media (prefers-reduced-motion: reduce) {
+  #boot { display: none; }
+}
+
+/* thin page-loading strip along the very top */
+#page-progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 0%;
+  background: linear-gradient(90deg, var(--cyan), #7dd3fc);
+  box-shadow: 0 0 8px rgba(34, 211, 238, .7);
+  z-index: 9998;
+  transition: width .2s ease, opacity .5s ease .3s;
+}
+#page-progress.hidden { opacity: 0; }
+
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #16222e; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }

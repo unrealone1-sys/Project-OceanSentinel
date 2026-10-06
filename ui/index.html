@@ -8,6 +8,28 @@
 <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
+<div id="page-progress"></div>
+
+<div id="boot" role="status" aria-label="loading">
+  <div class="boot-inner">
+    <div class="boot-radar">
+      <div class="boot-sweep"></div>
+      <i class="b1"></i><i class="b2"></i><i class="b3"></i>
+    </div>
+    <h1 class="boot-title">OCEANSENTINEL</h1>
+    <div class="boot-sub">MARITIME DOMAIN AWARENESS SYSTEM</div>
+    <div class="boot-bar"><div class="boot-fill" id="boot-fill"></div></div>
+    <div class="boot-row">
+      <span id="boot-pct">0%</span>
+      <span id="boot-status">INITIALIZING</span>
+    </div>
+    <div class="boot-chips">
+      <span>MAP ENGINE</span><span>AIS UPLINK</span><span>SONAR · LIDAR</span><span>GFW ENRICHMENT</span><span>ALERT ENGINE</span>
+    </div>
+    <div class="boot-skip">CLICK OR PRESS ANY KEY TO SKIP</div>
+  </div>
+</div>
+
 <div id="app">
   <header id="topbar">
     <div class="brand"><span class="radar"></span> OCEANSENTINEL <span class="ver" id="ver"></span></div>
