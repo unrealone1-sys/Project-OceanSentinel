@@ -434,7 +434,7 @@ pre.json { background: #060b12; border: 1px solid var(--border); border-radius: 
   inset: 0;
   border-radius: 50%;
   background: conic-gradient(from 0deg, rgba(34, 211, 238, .5), rgba(34, 211, 238, 0) 80deg, transparent 360deg);
-  animation: boot-sweep 1.6s linear infinite;
+  animation: boot-sweep 2.2s linear infinite;
 }
 @keyframes boot-sweep { to { transform: rotate(360deg); } }
 .boot-radar i {
@@ -444,7 +444,7 @@ pre.json { background: #060b12; border: 1px solid var(--border); border-radius: 
   border-radius: 50%;
   background: var(--cyan);
   box-shadow: 0 0 7px var(--cyan);
-  animation: boot-blip 1.7s infinite;
+  animation: boot-blip 2.2s infinite;
 }
 .boot-radar .b1 { top: 30%; left: 64%; }
 .boot-radar .b2 { top: 58%; left: 26%; animation-delay: .5s; }
@@ -458,7 +458,7 @@ pre.json { background: #060b12; border: 1px solid var(--border); border-radius: 
   text-indent: .34em;
   color: #eaf7ff;
   text-shadow: 0 0 18px rgba(34, 211, 238, .55);
-  animation: boot-tighten 1.5s ease-out both;
+  animation: boot-tighten 2.1s ease-out both;
 }
 @keyframes boot-tighten {
   from { letter-spacing: .8em; opacity: 0; filter: blur(4px); }

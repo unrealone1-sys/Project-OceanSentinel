@@ -1847,16 +1847,16 @@ function runBoot() {
   const pct = document.getElementById('boot-pct');
   const status = document.getElementById('boot-status');
   const chips = [...el.querySelectorAll('.boot-chips span')];
-  const tickMs = fast ? 16 : 45;
-  const factor = fast ? 0.08 : 0.03;
-  const floor = fast ? 1 : 0.5;
+  const tickMs = fast ? 16 : 58;
+  const factor = fast ? 0.08 : 0.026;
+  const floor = fast ? 1 : 0.45;
   let msgIdx = 0;
 
   const msgTimer = setInterval(() => {
     if (bootDone || !status) return clearInterval(msgTimer);
     status.textContent = BOOT_MESSAGES[msgIdx % BOOT_MESSAGES.length];
     msgIdx += 1;
-  }, fast ? 80 : 560);
+  }, fast ? 90 : 720);
 
   const tick = setInterval(() => {
     if (bootDone) return clearInterval(tick);
