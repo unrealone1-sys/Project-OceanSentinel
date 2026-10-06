@@ -2,6 +2,7 @@
 
 > **Full technical documentation:** [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md)
 > — architecture, data sources, alerting, API reference, verification record.
+> **Future plans:** [ROADMAP.md](ROADMAP.md) — aircraft data (ADS-B), cross-domain fusion, weather overlays, anomaly detection.
 
 **Live maritime domain awareness for Windows.** OceanSentinel fuses AIS radio,
 sonar/ARPA target trackers and marine LiDAR into one live vessel picture, flags
