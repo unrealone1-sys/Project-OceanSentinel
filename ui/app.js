@@ -1847,23 +1847,26 @@ function runBoot() {
   const pct = document.getElementById('boot-pct');
   const status = document.getElementById('boot-status');
   const chips = [...el.querySelectorAll('.boot-chips span')];
-  const tickMs = fast ? 16 : 58;
-  const factor = fast ? 0.08 : 0.026;
-  const floor = fast ? 1 : 0.45;
+  const tickMs = fast ? 16 : 55;
+  const factor = fast ? 0.08 : 0.03;
+  const floor = fast ? 1 : 0.55;
   let msgIdx = 0;
 
   const msgTimer = setInterval(() => {
     if (bootDone || !status) return clearInterval(msgTimer);
     status.textContent = BOOT_MESSAGES[msgIdx % BOOT_MESSAGES.length];
     msgIdx += 1;
-  }, fast ? 90 : 720);
+  }, fast ? 90 : 650);
 
   const tick = setInterval(() => {
     if (bootDone) return clearInterval(tick);
     // the bar stalls just short of done until real data arrives, so the
     // animation ends when the map is actually live — never before
     const cap = bootFirstState ? 100 : (fast ? 80 : 88);
-    bootState = Math.min(cap, bootState + Math.max(floor, (cap - bootState) * factor));
+    // once real data has arrived, finish quickly even in throttled background
+    // tabs (browsers clamp background timers to ~1/min)
+    const effFloor = bootFirstState ? Math.max(floor, 3) : floor;
+    bootState = Math.min(cap, bootState + Math.max(effFloor, (cap - bootState) * factor));
     if (fill) fill.style.width = `${bootState.toFixed(1)}%`;
     if (pct) pct.textContent = `${Math.floor(bootState)}%`;
     pageProgress(bootState / 100);
