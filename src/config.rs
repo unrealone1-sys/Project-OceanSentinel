@@ -16,6 +16,7 @@ pub struct Config {
     pub storage: StorageCfg,
     pub alerts: AlertsCfg,
     pub watchlist: WatchlistCfg,
+    pub icarus: IcarusCfg,
 }
 
 impl Config {
@@ -239,6 +240,116 @@ impl Default for SimCfg {
             sonar_range_km: 16.0,
             lidar_range_km: 4.0,
         }
+    }
+}
+
+/// Project Icarus — the aerospace domain (ADS-B aircraft). Runs alongside the
+/// maritime side and is served at `/icarus`; both maps can be switched between
+/// from either UI.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct IcarusCfg {
+    pub enabled: bool,
+    /// Community ADS-B aggregator speaking the ADSBexchange v2 JSON schema.
+    pub base_url: String,
+    /// Poll cadence for the rotating regional sweep.
+    pub poll_ms: u64,
+    /// Circles queried per tick. Each is rate-gated (`min_request_gap_ms`), so
+    /// this is what sets how wide the sweep can be per refresh.
+    pub queries_per_tick: usize,
+    /// Radius of one query circle, nautical miles (provider maximum is 250).
+    pub radius_nm: u32,
+    /// Hard cap on circles per sweep — the whole planet cannot be covered this
+    /// way, so wide views fall back to the global military feed.
+    pub max_circles: usize,
+    pub min_request_gap_ms: u64,
+    /// Burst allowance the client grants itself: at most this many requests per
+    /// `burst_window_s`. The public feed enforces roughly "a small burst, then
+    /// about one request every 15 s", so this is the knob that keeps a viewport
+    /// drag from getting the client blocked.
+    pub burst_requests: u32,
+    pub burst_window_s: u64,
+    /// Where to look when no browser is watching.
+    pub home_lat: f64,
+    pub home_lon: f64,
+    pub home_zoom: f64,
+    pub max_tracks: usize,
+    pub trail_points: usize,
+    /// An airborne aircraft unheard for this long is reported as lost contact.
+    /// The effective threshold is stretched automatically when the request
+    /// budget forces a slow sweep, so rotation never fakes an alert.
+    pub lost_contact_s: i64,
+    /// Drop a track this long after its last message.
+    pub drop_after_s: i64,
+    /// Sweep `/v2/mil` (every military aircraft the network hears, worldwide)
+    /// so a world view still shows a live air picture.
+    pub global_mil: bool,
+    pub mil_interval_s: u64,
+    pub alert_emergency: bool,
+    pub alert_military: bool,
+    pub alert_lost: bool,
+    pub alert_watchlist: bool,
+    pub alert_cooldown_s: i64,
+    /// Archive aircraft positions to `data/icarus/history/` (JSONL).
+    pub record: bool,
+    pub record_interval_s: u64,
+    /// Optional OpenSky Network provider (global civil coverage, needs
+    /// OPENSKY_CLIENT_ID / OPENSKY_CLIENT_SECRET). Off by default.
+    pub opensky: bool,
+    /// Aircraft to watch from config.toml (the UI can add more; both lists are
+    /// merged and persisted).
+    pub watch: Vec<crate::icarus::IcarusWatch>,
+}
+
+impl Default for IcarusCfg {
+    fn default() -> Self {
+        IcarusCfg {
+            enabled: true,
+            base_url: "https://api.adsb.lol".to_string(),
+            poll_ms: 8000,
+            queries_per_tick: 1,
+            // One large circle beats several small ones when requests are the
+            // scarce resource (250 nm is the provider's maximum).
+            radius_nm: 250,
+            max_circles: 4,
+            min_request_gap_ms: 2500,
+            // Measured against the public feed: one request every 15 s is
+            // sustainable indefinitely, a burst of ~5 in 20 s is not. Two per
+            // 40 s plus the once-a-minute military sweep sits just under it.
+            burst_requests: 2,
+            burst_window_s: 40,
+            // Default air picture: the busiest ADS-B airspace on earth, so a
+            // fresh install has something to look at before anyone moves the map.
+            home_lat: 51.47,
+            home_lon: -0.45,
+            home_zoom: 8.0,
+            max_tracks: 4000,
+            trail_points: 60,
+            lost_contact_s: 300,
+            drop_after_s: 1800,
+            global_mil: true,
+            mil_interval_s: 90,
+            alert_emergency: true,
+            alert_military: false,
+            alert_lost: true,
+            alert_watchlist: true,
+            alert_cooldown_s: 600,
+            record: false,
+            record_interval_s: 300,
+            opensky: false,
+            watch: Vec::new(),
+        }
+    }
+}
+
+impl IcarusCfg {
+    /// Where the map opens when no viewport has been sent yet.
+    pub fn home(&self) -> (f64, f64, f64) {
+        (
+            self.home_lat.clamp(-85.0, 85.0),
+            self.home_lon.clamp(-179.9, 179.9),
+            self.home_zoom.clamp(1.0, 18.0),
+        )
     }
 }
 

@@ -5,11 +5,13 @@
 //! vessels through the Global Fishing Watch API, and serves an OSIRIS-style
 //! live map over HTTP/WebSocket.
 
+mod adsb;
 mod ais;
 mod config;
 mod fusion;
 mod geo;
 mod gfw;
+mod icarus;
 mod land;
 mod model;
 mod nmea;
@@ -175,6 +177,25 @@ async fn main() -> Result<()> {
     )));
     let gfw = Arc::new(gfw::GfwClient::new(&cfg.gfw));
 
+    // Project Icarus: the aerospace domain runs beside the maritime one, with
+    // its own store and broadcast channel (the two UIs are separate pages) but
+    // the same alert-delivery pipeline.
+    let (icarus_tx, _) = broadcast::channel::<icarus::IcarusMsg>(256);
+    let icarus_client = Arc::new(adsb::AdsbClient::new(&cfg.icarus));
+    let icarus_demand: Arc<RwLock<Option<(icarus::Area, std::time::Instant)>>> =
+        Arc::new(RwLock::new(None));
+    let icarus_store = Arc::new(RwLock::new(icarus::IcarusStore::new(
+        &cfg.icarus,
+        paths.clone(),
+        cfg.icarus.watch.clone(),
+    )));
+    let auth_required = cfg
+        .server
+        .api_token
+        .as_deref()
+        .map(|t| !t.is_empty())
+        .unwrap_or(false);
+
     let meta = store::SnapshotMeta {
         trail_limit: cfg.fusion.snapshot_trail,
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -185,12 +206,7 @@ async fn main() -> Result<()> {
         port: cfg.server.port,
         recording: cfg.storage.record_tracks,
         alert_destinations: cfg.alerts.destinations(),
-        auth_required: cfg
-            .server
-            .api_token
-            .as_deref()
-            .map(|t| !t.is_empty())
-            .unwrap_or(false),
+        auth_required,
     };
 
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
@@ -201,7 +217,7 @@ async fn main() -> Result<()> {
             fusion::FusionDeps {
                 store: store.clone(),
                 bcast: bcast_tx.clone(),
-                notify: notify_tx,
+                notify: notify_tx.clone(),
                 paths: paths.clone(),
             },
             cfg.fusion.clone(),
@@ -210,6 +226,25 @@ async fn main() -> Result<()> {
         )
         .run(event_rx),
     );
+
+    if cfg.icarus.enabled {
+        tokio::spawn(
+            icarus::Icarus::new(
+                cfg.icarus.clone(),
+                icarus_store.clone(),
+                icarus_client.clone(),
+                icarus_tx.clone(),
+                notify_tx.clone(),
+                icarus_demand.clone(),
+                paths.clone(),
+                cfg.storage.retention_days,
+                auth_required,
+            )
+            .run(),
+        );
+    } else {
+        info!("Project Icarus (aerospace / ADS-B): disabled in config");
+    }
 
     let handles = sources::spawn_all(&cfg, &event_tx);
 
@@ -242,6 +277,21 @@ async fn main() -> Result<()> {
         info!("Global Fishing Watch: no token — set GFW_API_TOKEN in .env (free, non-commercial: https://globalfishingwatch.org/our-apis/tokens)");
     }
     info!("sensor feeds started: {}", handles.len());
+    if cfg.icarus.enabled {
+        let (hlat, hlon, _) = cfg.icarus.home();
+        info!(
+            "Project Icarus air map ready at /icarus (ADS-B via {}, home {hlat:.2},{hlon:.2}{})",
+            cfg.icarus.base_url,
+            if icarus_client.opensky_enabled() {
+                ", OpenSky enabled"
+            } else {
+                ""
+            }
+        );
+        if !cfg.icarus.global_mil {
+            info!("global military sweep is off — wide views will look sparse");
+        }
+    }
     if cfg.sources.aisstream.enabled {
         if cfg.sources.aisstream.api_key.is_some() {
             let scope = if cfg.sources.aisstream.bounding_boxes.is_empty() {
@@ -278,6 +328,11 @@ async fn main() -> Result<()> {
         gfw: gfw.clone(),
         cfg: Arc::new(cfg.clone()),
         history_cache: Arc::new(std::sync::Mutex::new(None)),
+        icarus: icarus_store.clone(),
+        icarus_bcast: icarus_tx.clone(),
+        icarus_demand: icarus_demand.clone(),
+        icarus_client: icarus_client.clone(),
+        icarus_enabled: cfg.icarus.enabled,
     });
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let url = format!("http://{}:{}/", cfg.server.host, cfg.server.port);

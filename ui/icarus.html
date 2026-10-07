@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Project Icarus — Aerospace Domain Awareness</title>
+<link rel="stylesheet" href="/vendor/maplibre-gl.css" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body class="theme-air">
+<div id="page-progress"></div>
+
+<div id="boot" role="status" aria-label="loading">
+  <div class="boot-inner">
+    <div class="boot-radar">
+      <div class="boot-sweep"></div>
+      <i class="b1"></i><i class="b2"></i><i class="b3"></i>
+    </div>
+    <h1 class="boot-title">PROJECT ICARUS</h1>
+    <div class="boot-sub">AEROSPACE DOMAIN AWARENESS</div>
+    <div class="boot-bar"><div class="boot-fill" id="boot-fill"></div></div>
+    <div class="boot-row">
+      <span id="boot-pct">0%</span>
+      <span id="boot-status">INITIALIZING</span>
+    </div>
+    <div class="boot-chips">
+      <span>ADS-B 1090 MHZ</span><span>TRANSPONDER DECODE</span><span>EMERGENCY WATCH</span><span>GLOBAL MIL SWEEP</span><span>TRACK FUSION</span>
+    </div>
+    <div class="boot-skip">CLICK OR PRESS ANY KEY TO SKIP</div>
+  </div>
+</div>
+
+<div id="app">
+  <header id="topbar">
+    <div class="brand"><span class="radar"></span> PROJECT ICARUS <span class="ver" id="ver"></span></div>
+    <nav class="domain-switch" aria-label="data domain">
+      <a class="dom" href="/" title="OceanSentinel — live AIS, sonar and LiDAR maritime picture">OCEAN</a>
+      <a class="dom active" href="/icarus" aria-current="page" title="Project Icarus — live ADS-B aircraft picture">AEROSPACE</a>
+    </nav>
+    <div class="chips">
+      <span class="chip" id="chip-ws">WS CONNECTING</span>
+      <span class="chip" id="chip-feed">FEED ?</span>
+      <span class="chip" id="chip-mode">MODE ?</span>
+    </div>
+    <div class="clock" id="clock">--:--:--Z</div>
+  </header>
+
+  <aside id="sidebar">
+    <nav class="tabs">
+      <button class="tab active" data-tab="aircraft">AIRCRAFT</button>
+      <button class="tab" data-tab="alerts">ALERTS <span class="badge" id="alert-badge">0</span></button>
+      <button class="tab" data-tab="watch">WATCH</button>
+      <button class="tab" data-tab="layers">LAYERS</button>
+    </nav>
+
+    <section class="panel active" id="panel-aircraft">
+      <input id="search" placeholder="search callsign, hex, type, tail…" autocomplete="off" />
+      <div class="filters" id="air-filters"></div>
+      <div class="toolrow">
+        <select id="sort-by" title="sort order">
+          <option value="priority">sort: detections first</option>
+          <option value="altitude">sort: highest</option>
+          <option value="speed">sort: fastest</option>
+          <option value="age">sort: most recently heard</option>
+          <option value="callsign">sort: callsign</option>
+        </select>
+        <label class="check tiny-check"><input type="checkbox" id="in-view" /> in view only</label>
+      </div>
+      <div class="list-head">
+        <span id="ac-count">0 aircraft</span>
+        <button class="btn tiny ghost" id="export-geojson">EXPORT</button>
+      </div>
+      <div class="list" id="ac-list"></div>
+    </section>
+
+    <section class="panel" id="panel-alerts">
+      <div class="list-head">
+        <span>Air alert feed</span>
+        <button class="btn tiny ghost" id="clear-alerts">CLEAR</button>
+      </div>
+      <div class="list" id="alert-list"></div>
+    </section>
+
+    <section class="panel" id="panel-watch">
+      <p class="hint">Watched aircraft raise a high-severity alert — in the UI and to any configured
+        webhook or Telegram destination. Match by ICAO 24-bit hex, callsign, or tail number.</p>
+      <div class="field-group">
+        <div class="group-title">ADD TO WATCHLIST</div>
+        <input id="watch-input" placeholder="hex 40643d, callsign EZY21UM, or tail G-EZUC" autocomplete="off" />
+        <input id="watch-note" placeholder="note (optional, e.g. government flight)" autocomplete="off" />
+        <button class="btn" id="watch-add">WATCH FOR THIS</button>
+      </div>
+      <div class="list-head"><span id="watch-count">0 watched</span></div>
+      <div id="watch-list" class="mini-list"></div>
+    </section>
+
+    <section class="panel" id="panel-layers">
+      <div class="field-group">
+        <div class="group-title">DATA DOMAIN</div>
+        <nav class="domain-switch wide" aria-label="data domain">
+          <a class="dom" href="/">OCEAN · SHIPS</a>
+          <a class="dom active" href="/icarus" aria-current="page">AEROSPACE · AIRCRAFT</a>
+        </nav>
+        <div class="hint">Both maps run from the same process: the maritime picture and the air
+          picture are separate stores with separate feeds.</div>
+      </div>
+      <div class="field-group">
+        <div class="group-title">BASEMAP</div>
+        <div class="filters" id="basemap-row"></div>
+      </div>
+      <div class="field-group">
+        <div class="group-title">DETECTIONS</div>
+        <label class="check"><input type="checkbox" data-filter="emergency" checked /> Emergency squawks</label>
+        <label class="check"><input type="checkbox" data-filter="military" checked /> Military / government</label>
+        <label class="check"><input type="checkbox" data-filter="watchlist" checked /> Watchlist contacts</label>
+        <label class="check"><input type="checkbox" data-filter="lost" checked /> Lost contact</label>
+      </div>
+      <div class="field-group">
+        <div class="group-title">FLIGHT STATE</div>
+        <label class="check"><input type="checkbox" data-state="airborne" checked /> Airborne</label>
+        <label class="check"><input type="checkbox" data-state="ground" checked /> On the ground</label>
+      </div>
+      <div class="field-group">
+        <div class="group-title">MAP LAYERS</div>
+        <label class="check"><input type="checkbox" data-layer="icons" checked /> Aircraft icons</label>
+        <label class="check"><input type="checkbox" data-layer="labels" checked /> Callsign labels</label>
+        <label class="check"><input type="checkbox" data-layer="trails" checked /> Flight trails</label>
+        <label class="check"><input type="checkbox" data-layer="rings" checked /> Detection rings</label>
+        <label class="check"><input type="checkbox" data-layer="circles" checked /> Receiver query coverage</label>
+      </div>
+      <div class="field-group">
+        <div class="group-title">FEED</div>
+        <div id="feed-detail" class="hint"></div>
+      </div>
+    </section>
+  </aside>
+
+  <main id="map"></main>
+
+  <div id="legend">
+    <div><i style="background:#64748b"></i> on ground</div>
+    <div><i style="background:#fbbf24"></i> below 5 000 ft</div>
+    <div><i style="background:#4ade80"></i> 5 000–20 000 ft</div>
+    <div><i style="background:#22d3ee"></i> 20 000–35 000 ft</div>
+    <div><i style="background:#c084fc"></i> above 35 000 ft</div>
+    <div><i style="background:#ef4444"></i> emergency ring</div>
+    <div><i style="background:#e2e8f0"></i> military ring</div>
+    <div><i style="background:#f59e0b"></i> watchlist ring</div>
+  </div>
+  <div id="cursor-readout">—</div>
+  <div id="banner" class="hidden"></div>
+
+  <aside id="drawer" class="hidden">
+    <button id="drawer-close" title="close">✕</button>
+    <div id="drawer-body"></div>
+  </aside>
+
+  <footer id="statusbar">
+    <div id="feeds">no feed</div>
+    <div id="stats">—</div>
+  </footer>
+</div>
+
+<script src="/vendor/maplibre-gl.js"></script>
+<script src="/basemaps.js"></script>
+<script src="/icarus.js"></script>
+</body>
+</html>

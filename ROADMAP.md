@@ -7,7 +7,7 @@ honest constraints. Items are ordered by value-to-effort ratio.
 | Phase | Theme | Status |
 |---|---|---|
 | 0 | Shipped (see [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md)) | ✅ done |
-| 1 | Aircraft data (ADS-B) | 📋 planned |
+| 1 | Aircraft data (ADS-B) → **Project Icarus**, the separate aerospace UI | ✅ done (2026-10-06) |
 | 2 | Sensor-fusion cross-domain alerts | 📋 planned |
 | 3 | Weather & notices overlay | 📋 planned |
 | 4 | Local anomaly detection (ML) | 📋 planned |
@@ -17,7 +17,12 @@ honest constraints. Items are ordered by value-to-effort ratio.
 
 ---
 
-## Phase 1 — Aircraft data (ADS-B)
+## Phase 1 — Aircraft data (ADS-B) → shipped as Project Icarus
+
+**Status: implemented.** The air domain now runs beside the maritime one as
+*Project Icarus*, with its own UI at `/icarus` and a domain switcher in both
+maps. See [§1.6](#16-what-actually-shipped-2026-10-06) below for what was built
+versus what this plan originally assumed.
 
 The aviation equivalent of AIS: aircraft constantly broadcast position on
 1090 MHz (ADS-B), unencrypted, and the same multi-source pattern used for
@@ -88,6 +93,51 @@ association, alert, persistence and replay machinery, and cross-domain fusion
 * **Risks:** track counts double when a wide-area ADS-B feed is on
   (`max_tracks` may need a per-domain cap); aircraft move ~20× faster than
   ships, so dead-reckoning and trail budgets need per-domain tuning.
+
+### 1.6 What actually shipped (2026-10-06)
+
+Built, verified live, and different from the sketch above where reality
+disagreed with it:
+
+* **Separate store, not a `domain` field on `Track`.** The plan recommended one
+  shared store. In practice the two domains share no physics (a vessel reports
+  every few seconds and drifts; an airliner crosses a viewport in a minute),
+  the two maps are separate pages with separate WebSockets, and a shared store
+  would have forced vessel-shaped assumptions onto aircraft. `src/icarus.rs`
+  keeps its own `AircraftTrack` map; what it *borrows* is everything genuinely
+  domain-neutral — the `Alert` type and its whole delivery pipeline
+  (webhook/Telegram/alert log), `TrailPoint`, atomic file persistence and the
+  geodesy helpers.
+* **Providers:** `adsb.lol` as the keyless default. `airplanes.live` is
+  implemented in the same v2 schema but **returns HTTP 403 to unregistered
+  clients** ("contact us at contact@airplanes.live"), so it is not usable as a
+  default. OpenSky is wired in as an optional provider for global *civil*
+  coverage, off by default, needing `OPENSKY_CLIENT_ID`/`OPENSKY_CLIENT_SECRET`
+  (it was also unreachable from the development network).
+* **Local SBS-1 / readsb ingest: not built.** It remains the best answer for
+  zero-internet operation and drops straight into the existing
+  `Router::line`/`nmea_tcp` pattern when wanted.
+* **Coverage is viewport-driven.** The browser tells the server what it can
+  see; the server covers that view with query circles (up to `max_circles` of
+  `radius_nm` each), rotating through them a few per tick. Nobody watching ⇒ a
+  home box is swept instead, so alerts keep flowing unattended. The circles in
+  force are drawn on the map as a dashed overlay: the coverage gaps are visible
+  rather than implied.
+* **The global layer is `/v2/mil`.** Military and government aircraft worldwide
+  come back in a single request, so wide views switch to "GLOBAL VIEW · MIL
+  SWEEP" instead of pretending a handful of circles covers a continent.
+* **Detections shipped:** emergency squawks (7500/7600/7700 plus the ADS-B
+  emergency field, with escalations breaking through the alert cooldown),
+  military/government contacts, watchlist hits (hex / callsign / tail), and
+  lost contact — the dark-vessel analogue, phrased as *not* proof of anything
+  because transponder range is line-of-sight.
+* **Not yet built from this phase:** aircraft replay UI (positions are
+  archived to `data/icarus/history/` when `[icarus] record = true`, but nothing
+  scrubs them yet) and an aircraft simulator for offline demos.
+* **Verified:** 20 unit tests over the new modules (record parsing, `dbFlags`,
+  emergency mapping, circle coverage, home-sweep coverage, watchlist matching,
+  lost-contact thresholds, eviction, snapshot shape), plus live end-to-end
+  runs against the public feed.
 
 ---
 

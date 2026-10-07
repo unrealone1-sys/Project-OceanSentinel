@@ -33,6 +33,10 @@
 <div id="app">
   <header id="topbar">
     <div class="brand"><span class="radar"></span> OCEANSENTINEL <span class="ver" id="ver"></span></div>
+    <nav class="domain-switch" aria-label="data domain">
+      <a class="dom active" href="/" aria-current="page" title="OceanSentinel — live AIS, sonar and LiDAR maritime picture">OCEAN</a>
+      <a class="dom" href="/icarus" title="Project Icarus — live ADS-B aircraft picture">AEROSPACE</a>
+    </nav>
     <div class="chips">
       <span class="chip" id="chip-ws">WS CONNECTING</span>
       <span class="chip" id="chip-mode">MODE ?</span>
@@ -85,6 +89,15 @@
     </section>
 
     <section class="panel" id="panel-layers">
+      <div class="field-group">
+        <div class="group-title">DATA DOMAIN</div>
+        <nav class="domain-switch wide" aria-label="data domain">
+          <a class="dom active" href="/" aria-current="page">OCEAN · SHIPS</a>
+          <a class="dom" href="/icarus">AEROSPACE · AIRCRAFT</a>
+        </nav>
+        <div class="hint">Both maps run from the same process: the maritime picture and the air
+          picture are separate stores with separate feeds.</div>
+      </div>
       <div class="field-group">
         <div class="group-title">BASEMAP</div>
         <div class="filters" id="basemap-row"></div>
@@ -187,6 +200,7 @@
 </div>
 
 <script src="/vendor/maplibre-gl.js"></script>
+<script src="/basemaps.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

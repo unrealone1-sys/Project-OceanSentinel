@@ -5,12 +5,21 @@ this file is the working knowledge a new session needs to be productive fast.
 
 ## What this is
 
-A Windows desktop application (single Rust binary + embedded web UI) for live
-maritime domain awareness. It ingests AIS radio (NMEA `!AIVDM`), sonar/radar/ARPA
-target sentences (`TLL`, `TTM`) and LiDAR contact JSON, fuses them into live
-vessel tracks, raises alerts for vessels that are physically present but not
-transmitting AIS ("dark contacts"), enriches identities via the Global Fishing
-Watch API, and renders an OSIRIS-style dark live map.
+A Windows desktop application (single Rust binary + two embedded web UIs) for
+live domain awareness in **two domains**:
+
+* **OceanSentinel** (`/`) — maritime. Ingests AIS radio (NMEA `!AIVDM`),
+  sonar/radar/ARPA target sentences (`TLL`, `TTM`) and LiDAR contact JSON, fuses
+  them into live vessel tracks, raises alerts for vessels that are physically
+  present but not transmitting AIS ("dark contacts"), and enriches identities
+  via the Global Fishing Watch API.
+* **Project Icarus** (`/icarus`) — aerospace. Polls a keyless ADS-B aggregator
+  for aircraft state vectors, tracks them with flight trails, and alerts on
+  emergency squawks, military/government contacts, watchlist hits and lost
+  contact.
+
+Both render OSIRIS-style dark live maps and can switch to each other from the
+top bar of either page.
 
 Zero-hardware demo is built in and on by default (traffic simulator around the
 configured AOI). Real sensors are documented in `README.md`.
@@ -45,7 +54,9 @@ Run with `--no-open` when testing so no browser window is spawned.
 |---|---|
 | `src/main.rs` | CLI (clap), wiring, Edge/Chrome `--app` window launch |
 | `src/config.rs` | `config.toml` (+ `OS_PORT`/`OS_HOST`/`OS_SIM`/`GFW_API_TOKEN` env overrides) |
-| `src/model.rs` | `Contact`, `Track`, `Alert`, `Zone`, `FeedStatus`, `OwnShipFix`, ship-type classification |
+| `src/model.rs` | `Contact`, `Track`, `Alert`, `Zone`, `FeedStatus`, `OwnShipFix`, ship-type classification (shared with Icarus) |
+| `src/adsb.rs` | Project Icarus feed client: ADS-B record parsing, viewport→query-circle planning, request budget, registry lookup |
+| `src/icarus.rs` | Air-domain store: `AircraftTrack`, poller, trails, air alerts, aircraft watchlist, position archive |
 | `src/geo.rs` | haversine, destination point, bearing, point-in-polygon |
 | `src/nmea.rs` | NMEA 0183 framing + checksum, own-ship nav (GGA/GLL/RMC/HDT/VTG), `TLL`/`TTM` parsers |
 | `src/ais.rs` | AIS 6-bit decode (types 1/2/3/4/5/11/18/19/24), multi-fragment assembler, encoder (sim + tests) |
@@ -54,16 +65,21 @@ Run with `--no-open` when testing so no browser window is spawned.
 | `src/gfw.rs` | Global Fishing Watch v3 client (search / detail / insights / multi-dataset events) with TTL cache |
 | `src/persist.rs` | Atomic JSON state (zones/watchlist), JSONL alert log, history recording + retention |
 | `src/notify.rs` | Out-of-band alert delivery: webhooks + Telegram, severity floor, rate limit |
-| `src/server.rs` | axum REST + WebSocket + embedded UI (`rust-embed`) |
+| `src/server.rs` | axum REST + WebSocket + embedded UI (`rust-embed`) for both domains (`/ws` and `/api/icarus/ws`) |
 | `src/sources/ingest.rs` | Per-feed router: one `Router` per feed owns the AIS assembler + own-ship state |
 | `src/sources/aisstream.rs` | Global live AIS over WebSocket (AISStream.io), mapped onto `AisBody` |
 | `src/sources/nmea_tcp.rs`, `nmea_udp.rs` | Feed transports with reconnect/backoff and feed status |
 | `src/sources/simulator.rs` | Built-in traffic generator (emits real NMEA/JSON through the real ingest path) |
-| `ui/` | MapLibre dark map UI, vendored `ui/vendor/maplibre-gl.js`, embedded into the exe |
+| `ui/` | two MapLibre dark map UIs (`index.html`/`app.js` = ships, `icarus.html`/`icarus.js` = aircraft) sharing `style.css` and `basemaps.js`; vendored `ui/vendor/maplibre-gl.js`; all embedded into the exe |
 
-Data flow: feed → `Router` → `Event` (mpsc) → `Fusion` → `Store` → broadcast →
-WebSocket/`/api/state` → UI. Never bypass `Router` when adding a feed: it holds
-per-feed AIS fragment assembly and own-ship state.
+Data flow (ships): feed → `Router` → `Event` (mpsc) → `Fusion` → `Store` →
+broadcast → WebSocket/`/api/state` → UI. Never bypass `Router` when adding a
+feed: it holds per-feed AIS fragment assembly and own-ship state.
+
+Data flow (aircraft): browser viewport → `/api/icarus/ws` → `icarus_demand` →
+`Icarus::run` poll loop → `AdsbClient` → `IcarusStore` → broadcast → UI. The two
+domains deliberately share nothing but `Alert`, `TrailPoint`, `persist` and the
+delivery pipeline; the stores, channels, watchlists and UI pages are separate.
 
 ## Ports
 
@@ -76,6 +92,41 @@ per-feed AIS fragment assembly and own-ship state.
 | 10113 | LiDAR contact JSON over UDP |
 
 ## Invariants and hard-won gotchas
+
+* **The ADS-B feed has a small request budget — respect it.** Measured against
+  `api.adsb.lol`: about **one request every 15 s is sustainable indefinitely**,
+  while a burst of ~5 within 20 s returns HTTP 429. Never raise
+  `queries_per_tick`/`burst_requests` "to make it feel live": the client's
+  `Budget` token bucket (`src/adsb.rs`) plus the poller's "skip a tick I cannot
+  afford" check are what keep the app off the block list. A 429 triggers an
+  exponentially growing hold-off that halves on success — do not remove it.
+  Because the sweep is slow, the lost-contact threshold is *stretched* to the
+  observed refresh cycle (`lost_after_s`); a fixed threshold would fire false
+  alerts purely from circle rotation.
+* **`/v2/mil` is the only global query.** It returns every military/government
+  aircraft the network hears, worldwide, in one request. Wide views switch to
+  it (`mode: "global"`); that is why the air map is not empty when zoomed out.
+* **`airplanes.live` serves the same v2 schema but returns HTTP 403** to
+  unregistered clients ("contact us at contact@airplanes.live"). Do not switch
+  the default to it.
+* **MapLibre 4 will not accept a `<canvas>` as an `addImage` source once the map
+  is rendering** — it throws `mismatched image size. expected: 0 but got: N`
+  because a canvas carries no pixel buffer. Pass `ImageData`
+  (`ctx.getImageData(...)`). The ship icon builders already did; the aircraft
+  one did not, which silently aborted the whole layer-setup callback and left an
+  empty map. Both UIs now also call the setup function directly if the style is
+  already loaded, and report any failure through `banner()` +
+  `window.__osLayerError` instead of dying silently.
+* **Positions on the aircraft map are dead-reckoned from `age_s`,** the server's
+  measurement of how long ago the network heard the aircraft — not from
+  `last_seen` timestamps, so a browser/server clock skew cannot warp the
+  picture. Extrapolation is capped at 90 s.
+* **Two embedded fonts/paths matter**: glyphs come from
+  `fonts.openmaptiles.org` and every text layer must name a font that exists
+  there (`Open Sans Regular`), or MapLibre silently renders no text at all.
+* **Aircraft watchlists live in `data/icarus/watchlist.json`**, separate from
+  the vessel `data/watchlist.json`. Alerts from both domains share
+  `data/alerts.jsonl`; the air UI restores only `aircraft_*` kinds.
 
 * **AIS field order**: `type(6)` → `repeat(2)` → `mmsi(30)`. Omitting the 2-bit
   repeat indicator shifts every field and silently produces plausible-looking

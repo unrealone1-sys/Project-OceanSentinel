@@ -256,6 +256,58 @@ drawer. Without a token everything else still works.
 
 ---
 
+## Project Icarus — the aerospace domain
+
+The same binary also runs an air picture, on its own page at
+**<http://127.0.0.1:8787/icarus>**. Both maps carry a domain switch in the top
+bar, so either one can jump to the other.
+
+Aircraft broadcast identity, position, altitude and *intent* in the clear on
+1090 MHz (ADS-B), and a volunteer receiver network republishes that as JSON. No
+API key is required: the default provider is [adsb.lol](https://adsb.lol), with
+[OpenSky](https://opensky-network.org) available as an optional provider for
+global civil coverage (`OPENSKY_CLIENT_ID` / `OPENSKY_CLIENT_SECRET`).
+
+What it does with that feed, in the same spirit as the dark-vessel logic:
+
+| Detection | Meaning | Default |
+|---|---|---|
+| **Emergency squawk** | 7500 / 7600 / 7700, or the ADS-B emergency field — with escalations breaking through the alert cooldown | on |
+| **Military / government** | Aircraft flagged in the global military sweep | off (fires a lot) |
+| **Watchlist hit** | A watched hex, callsign or tail number appears | on |
+| **Lost contact** | An airborne aircraft stops being heard. Explicitly *not* proof of anything — transponder range is line-of-sight, so leaving receiver range looks the same as switching off | on |
+
+Two things are worth understanding before reading the map:
+
+* **Coverage is receiver-bound**, exactly like AIS: dense over Europe and North
+  America, thin over Africa and South Asia. The map draws the query circles it is
+  actually using as a dashed overlay, so its own blind spots are visible instead
+  of implied.
+* **The public feed has a request budget.** Measured: roughly one request every
+  15 s is sustainable, while a burst of five within 20 s gets blocked. The
+  client spends that budget deliberately — few large (250 nm) circles, a rotating
+  sweep, a once-a-minute global military query — backs off automatically on HTTP
+  429, and shows `RATE LIMITED · RESTING` rather than pretending. Aircraft stay on
+  screen and age while the sweep rests.
+
+```toml
+[icarus]
+enabled = true
+base_url = "https://api.adsb.lol"
+poll_ms = 8000          # tick cadence
+queries_per_tick = 1    # circles per tick
+radius_nm = 250         # provider maximum
+burst_requests = 2      # per burst_window_s
+burst_window_s = 40
+global_mil = true       # worldwide military sweep, one request
+[[icarus.watch]]
+callsign = "RCH123"
+note = "government flight"
+```
+
+The air map has its own watchlist (`data/icarus/watchlist.json`) and can archive
+positions to `data/icarus/history/<day>.jsonl` with `record = true`.
+
 ## The map
 
 * **Built for worldwide feeds**: markers are clustered below zoom 8, snapshots

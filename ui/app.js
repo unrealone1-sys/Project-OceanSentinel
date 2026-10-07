@@ -103,78 +103,9 @@ function banner(msg, kind = '') {
 
 /* ------------------------------------------------------------------ map */
 
-// Basemap options. The CARTO "dark" style is nearly featureless over open
-// ocean (a flat grey plate), so satellite imagery is the default: coastlines,
-// land and shoals are always visible, and vessel colours read well on it.
-const BASEMAPS = {
-  satellite: {
-    label: 'SATELLITE',
-    tiles: [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    ],
-    tileSize: 256,
-    attribution: 'Imagery © Esri, Maxar, Earthstar Geographics',
-    paint: { 'raster-opacity': 0.9, 'raster-saturation': -0.1, 'raster-brightness-max': 0.9 },
-  },
-  dark: {
-    label: 'DARK',
-    // Esri World Dark Gray Canvas: keyless and no rate-limit warnings. CARTO's
-    // dark tiles now throttle unauthenticated browsers with "API KEY REQUIRED"
-    // placeholder images.
-    tiles: [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
-    ],
-    tileSize: 256,
-    attribution: 'Esri Dark Gray Canvas',
-    paint: { 'raster-opacity': 0.95 },
-  },
-  streets: {
-    label: 'STREETS',
-    tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-    tileSize: 256,
-    attribution: '© OpenStreetMap contributors',
-    paint: { 'raster-opacity': 0.85 },
-  },
-  ocean: {
-    label: 'OCEAN',
-    // bathymetry and ocean-place names — the natural style for a maritime tool.
-    // Esri only has survey data near coasts and at low zooms; open-sea tiles
-    // read "Map data not yet available".
-    tiles: [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
-    ],
-    tileSize: 256,
-    attribution: 'Esri Ocean Basemap',
-    paint: { 'raster-opacity': 0.92 },
-  },
-  topo: {
-    label: 'TOPO',
-    tiles: [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}',
-    ],
-    tileSize: 256,
-    attribution: 'Esri World Topo Map',
-    paint: { 'raster-opacity': 0.9 },
-  },
-  natgeo: {
-    label: 'NAT GEO',
-    tiles: [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/NatGeo_World_Map/MapServer/tile/{z}/{y}/{x}',
-    ],
-    tileSize: 256,
-    attribution: 'Esri National Geographic',
-    paint: { 'raster-opacity': 0.9 },
-  },
-  relief: {
-    label: 'RELIEF',
-    tiles: [
-      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}',
-    ],
-    tileSize: 256,
-    attribution: 'Esri Shaded Relief',
-    paint: { 'raster-opacity': 0.9 },
-  },
-};
+// Basemaps live in basemaps.js, shared with Project Icarus (the air map) so
+// both pages offer the same seven styles from one definition.
+const BASEMAPS = window.OS_BASEMAPS;
 
 let activeBasemap = (() => {
   try {
@@ -369,7 +300,7 @@ function ownIcon() {
 
 const EMPTY_FC = { type: 'FeatureCollection', features: [] };
 
-map.on('load', () => {
+function setupMapLayers() {
   for (const style of Object.keys(COLORS)) {
     for (const shape of SHAPES) {
       map.addImage(`v-${style}-${shape}`, shipIcon(COLORS[style], shape), { pixelRatio: 2 });
@@ -563,7 +494,23 @@ map.on('load', () => {
 
   applyLayerVisibility();
   pushData();
-});
+}
+
+/// Wire up once the style exists. If the load event already fired (a cached
+/// style can beat the registration), run immediately instead of never.
+if (map.loaded()) {
+  setupMapLayers();
+} else {
+  map.on('load', () => {
+    try {
+      setupMapLayers();
+    } catch (e) {
+      window.__osLayerError = String((e && e.message) || e);
+      banner('Map layers failed to initialise: ' + window.__osLayerError, 'bad');
+      throw e;
+    }
+  });
+}
 
 map.on('mousemove', (e) => {
   document.getElementById('cursor-readout').textContent =

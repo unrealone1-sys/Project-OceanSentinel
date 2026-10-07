@@ -108,3 +108,101 @@ bounding_boxes = [[[-90.0, -180.0], [90.0, 180.0]]]
 enabled = true
 base_url = "https://gateway.api.globalfishingwatch.org"
 cache_ttl_s = 21600
+
+# =============================================================================
+# Project Icarus — the aerospace domain (ADS-B aircraft), served at /icarus
+# =============================================================================
+# Aircraft broadcast identity, position and intent in the clear on 1090 MHz;
+# a volunteer receiver network republishes that picture as JSON. The default
+# provider needs no API key at all.
+#
+# Coverage is receiver-bound, exactly like AIS: dense over Europe and North
+# America, thin over Africa and South Asia. The one global exception is the
+# military sweep below, which returns every military and government aircraft
+# the network can hear worldwide in a single request — that is what a
+# world-zoom view shows.
+[icarus]
+enabled = true
+# adsb.lol speaks the ADSBexchange v2 schema and needs no key. Note that
+# airplanes.live serves the same schema but returns HTTP 403 to unregistered
+# clients ("contact us at contact@airplanes.live"), so it is not a drop-in.
+base_url = "https://api.adsb.lol"
+
+# ---- the request budget ----------------------------------------------------
+# The public feed is free and keyless, and it is NOT unlimited. Measured
+# against api.adsb.lol: roughly one request every 15 s is sustainable
+# indefinitely, while a burst of ~5 in 20 s gets the client blocked (HTTP 429).
+# Everything below is about spending that budget well, and the client also
+# self-corrects: a 429 puts it into an exponentially growing hold-off that
+# halves again on every success.
+#
+# Sweep cadence: each tick issues at most `queries_per_tick` circles out of the
+# grid covering your viewport, rotating, so the grid refreshes over several
+# ticks. A tick that cannot afford a request is skipped rather than blocked, so
+# the API and the WebSocket stay responsive.
+poll_ms = 8000
+queries_per_tick = 1
+# Radius of one query, nautical miles (provider maximum is 250). Larger radius
+# beats more circles when requests are the scarce resource.
+radius_nm = 250
+# Hard ceiling on circles per sweep. Wide views beyond this switch to the
+# global military sweep instead of pretending to cover a continent.
+max_circles = 4
+# Minimum spacing between two requests, so a viewport drag cannot machine-gun
+# the provider.
+min_request_gap_ms = 2500
+# Burst allowance: at most this many requests per `burst_window_s`.
+burst_requests = 2
+burst_window_s = 40
+
+# Where the air map looks when no browser has it open (alerts keep flowing).
+# Default is the busiest ADS-B airspace on earth. Point it at your local
+# airport for a quieter, more personal picture.
+home_lat = 51.47
+home_lon = -0.45
+home_zoom = 8.0
+
+max_tracks = 4000
+# Flight trails: aircraft cover ground fast, so points are dropped in at ~900 m
+# or 15 s and the tail is kept short.
+trail_points = 60
+
+# Detection thresholds. "Lost contact" is the dark-vessel analogue and is *not*
+# proof of anything on its own: transponder range is line-of-sight, so an
+# aircraft leaving receiver range looks exactly like one switching off.
+# The effective threshold is stretched automatically when a slow sweep needs
+# longer than this to revisit an area, so rotation never fakes an alert.
+lost_contact_s = 300
+drop_after_s = 1800
+
+# Every military / government aircraft the network hears, worldwide, in one
+# request. Cheap (once a minute) and the only genuinely global layer available
+# without a paid feed.
+global_mil = true
+mil_interval_s = 90
+
+# Alerts. Emergency squawks (7500/7600/7700) are on by default; military by
+# default is off because it fires a lot in some regions.
+alert_emergency = true
+alert_military = false
+alert_lost = true
+alert_watchlist = true
+alert_cooldown_s = 600
+# Escalations (lifeguard -> 7700) break through the cooldown; repeats do not.
+
+# Archive aircraft positions to data/icarus/history/<day>.jsonl
+record = false
+record_interval_s = 300
+
+# Optional OpenSky Network provider: the only source here that answers a global
+# query for *civil* traffic. Needs a free account; set OPENSKY_CLIENT_ID and
+# OPENSKY_CLIENT_SECRET in .env, then turn this on.
+opensky = false
+
+# Watchlist from config (the UI adds more; both are merged and persisted to
+# data/icarus/watchlist.json). Match on any of hex / callsign / registration.
+# [[icarus.watch]]
+# hex = "ae5667"                  # ICAO 24-bit address, lowercase
+# callsign = "RCH123"             # as broadcast, no spaces
+# registration = "G-EZUC"         # tail number
+# note = "government flight"

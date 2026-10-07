@@ -27,6 +27,15 @@ impl Paths {
         if let Err(e) = fs::create_dir_all(&history) {
             tracing::warn!("could not create data directory {}: {e}", history.display());
         }
+        // Project Icarus keeps its own corner: aircraft watchlist and archive,
+        // separate from the maritime history so neither can corrupt the other.
+        let icarus = root.join("icarus");
+        if let Err(e) = fs::create_dir_all(icarus.join("history")) {
+            tracing::warn!(
+                "could not create aircraft data directory {}: {e}",
+                icarus.display()
+            );
+        }
         Paths { root, history }
     }
 
@@ -44,6 +53,21 @@ impl Paths {
 
     pub fn history_day(&self, day: &str) -> PathBuf {
         self.history.join(format!("{day}.jsonl"))
+    }
+
+    /// Project Icarus (aerospace) data root.
+    pub fn icarus_dir(&self) -> PathBuf {
+        self.root.join("icarus")
+    }
+
+    pub fn icarus_watchlist(&self) -> PathBuf {
+        self.icarus_dir().join("watchlist.json")
+    }
+
+    pub fn icarus_history_day(&self, day: &str) -> PathBuf {
+        self.icarus_dir()
+            .join("history")
+            .join(format!("{day}.jsonl"))
     }
 }
 

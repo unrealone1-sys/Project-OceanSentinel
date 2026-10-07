@@ -518,3 +518,128 @@ pre.json { background: #060b12; border: 1px solid var(--border); border-radius: 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: #16222e; border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ======================================================================
+   Project Icarus — the aerospace domain.
+   The chrome is shared with OceanSentinel; this block only re-tints it and
+   adds the aircraft-specific pieces. Nothing here changes the ocean page.
+   ====================================================================== */
+
+/* ---------- domain switcher (present in BOTH UIs) ---------- */
+.domain-switch {
+  display: flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: #060c14;
+  flex: 0 0 auto;
+}
+.domain-switch .dom {
+  padding: 5px 11px;
+  font: 10px var(--mono);
+  letter-spacing: 1.2px;
+  color: var(--dim);
+  text-decoration: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.domain-switch .dom + .dom { border-left: 1px solid var(--border); }
+.domain-switch .dom:hover { color: var(--text); background: #0d1722; }
+.domain-switch .dom.active { color: #04121a; background: var(--cyan); font-weight: 700; }
+.domain-switch.wide { width: 100%; }
+.domain-switch.wide .dom { flex: 1; justify-content: center; }
+
+.theme-air .domain-switch .dom.active { background: var(--amber); color: #1a1206; }
+
+/* ---------- air tint: amber instead of cyan, everywhere in the chrome ----- */
+.theme-air { --accent: #f59e0b; }
+.theme-air .radar { border-color: var(--amber); box-shadow: 0 0 8px rgba(245, 158, 11, .55); }
+.theme-air .radar::after { background: var(--amber); }
+.theme-air .tab.active { color: var(--amber); border-bottom-color: var(--amber); }
+.theme-air input:focus { border-color: var(--amber); }
+.theme-air .check input { accent-color: #f59e0b; }
+.theme-air .btn { color: var(--amber); border-color: #4a3820; }
+.theme-air .btn:hover { background: #221a10; }
+.theme-air .filters .fchip[data-b].on { background: var(--amber); border-color: var(--amber); color: #1a1206; }
+.theme-air .filters .fchip.on { color: #1a1206; background: #334155; border-color: #475569; }
+.theme-air .list-head .btn { color: var(--dim); }
+.theme-air .boot-radar {
+  border-color: rgba(245, 158, 11, .5);
+  box-shadow: 0 0 30px rgba(245, 158, 11, .26), inset 0 0 22px rgba(245, 158, 11, .14);
+}
+.theme-air .boot-radar::before, .theme-air .boot-radar::after { border-color: rgba(245, 158, 11, .22); }
+.theme-air .boot-sweep {
+  background: conic-gradient(from 0deg, rgba(245, 158, 11, .5), rgba(245, 158, 11, 0) 80deg, transparent 360deg);
+}
+.theme-air .boot-radar i { background: var(--amber); box-shadow: 0 0 7px var(--amber); }
+.theme-air .boot-title { text-shadow: 0 0 18px rgba(245, 158, 11, .5); }
+.theme-air .boot-fill { background: linear-gradient(90deg, var(--amber), #fcd34d); box-shadow: 0 0 12px rgba(245, 158, 11, .6); }
+.theme-air #page-progress { background: linear-gradient(90deg, var(--amber), #fcd34d); box-shadow: 0 0 8px rgba(245, 158, 11, .7); }
+.theme-air #boot-pct { color: var(--amber); }
+.theme-air .maplibregl-ctrl-attrib { background: rgba(6, 10, 16, .7) !important; }
+.theme-air ::-webkit-scrollbar-thumb { background: #221d16; }
+
+/* ---------- aircraft list rows ---------- */
+.arow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px;
+  border-bottom: 1px solid #0d1620;
+  cursor: pointer;
+}
+.arow:hover { background: #141017; }
+.arow.sel { background: #221a10; box-shadow: inset 2px 0 0 var(--amber); }
+.arow .amain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.arow .atitle {
+  color: #e6eef8;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.arow .asub { color: var(--dim); font-size: 9.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.arow .ametrics { display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap; }
+.arow .ametrics b { color: #e6eef8; font-size: 11px; }
+.arow .ametrics i { color: var(--dim); font-size: 9.5px; font-style: normal; }
+.arow .dot { flex: 0 0 auto; }
+
+/* detection tags in the list and drawer */
+.tag {
+  font-size: 8px;
+  padding: 1px 4px;
+  border-radius: 2px;
+  border: 1px solid var(--border);
+  color: var(--dim);
+  letter-spacing: .5px;
+  font-style: normal;
+  flex: 0 0 auto;
+}
+.tag.emergency { background: #7f1d1d; color: #fff; border-color: #b91c1c; }
+.tag.military { background: #1e293b; color: #e2e8f0; border-color: #334155; }
+.tag.watchlist { background: #241a10; color: #fbbf24; border-color: #4a3820; }
+.tag.lost { background: #0f172a; color: #cbd5e1; border-color: #334155; }
+
+/* altitude tape in the drawer */
+.alt-tape {
+  position: relative;
+  height: 8px;
+  border-radius: 2px;
+  margin: 8px 0 12px;
+  background: linear-gradient(90deg, #fbbf24, #4ade80 30%, #22d3ee 65%, #c084fc);
+  opacity: .85;
+}
+.alt-tape i {
+  position: absolute;
+  top: -3px;
+  width: 3px;
+  height: 14px;
+  background: #fff;
+  border-radius: 2px;
+  box-shadow: 0 0 6px #fff;
+}
+#drawer .badges .btn { margin-right: 4px; }

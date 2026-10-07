@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Project** | OceanSentinel — Live Maritime Domain Awareness |
-| **Version** | 1.0 (aligned with commit `3a4c3eb`) |
-| **Date** | 2026-10-05 |
+| **Project** | OceanSentinel — Live Maritime Domain Awareness, and **Project Icarus** — the aerospace domain (`/icarus`) |
+| **Version** | 1.1 |
+| **Date** | 2026-10-06 |
 | **Platform** | Windows 10/11 (single self-contained executable) |
 | **Licence** | MIT (see `LICENSE`) |
 | **Quick start** | See `README.md` — this document is the full technical reference |
@@ -88,6 +88,7 @@ MapLibre — compiles into one ~10 MB Rust binary. No runtime dependencies.
 | `src/main.rs` | CLI, wiring, `.env` discovery, logging setup, browser launch |
 | `src/config.rs` | `config.toml` + environment overrides (precedence: config < env < CLI) |
 | `src/model.rs` | Core types: Contact, Track, Alert, Zone, WatchEntry, HistoryPoint |
+| `src/adsb.rs` | Project Icarus feed client: ADS-B record parsing, viewport→query-circle planning, registry lookups |
 | `src/geo.rs` | Haversine, destination point, bearing, point-in-polygon |
 | `src/nmea.rs` | NMEA 0183 framing/checksum, own-ship nav, TLL/TTM target parsers |
 | `src/ais.rs` | AIS 6-bit codec (types 1/2/3/4/5/11/18/19/24), assembler, encoder |
@@ -97,9 +98,10 @@ MapLibre — compiles into one ~10 MB Rust binary. No runtime dependencies.
 | `src/gfw.rs` | GFW v3 client: identity search, detail, insights, multi-dataset events |
 | `src/persist.rs` | Atomic JSON writes, JSONL append, history + retention |
 | `src/notify.rs` | Alert delivery: webhooks, Telegram, severity floor, rate limit |
-| `src/server.rs` | REST + WebSocket + auth + replay + embedded UI |
+| `src/icarus.rs` | Air-domain store: AircraftTrack, poller, trails, air alerts, watchlist, archive |
+| `src/server.rs` | REST + WebSocket + auth + replay + embedded UI (both domains) |
 | `src/sources/*` | Feed transports (TCP/UDP), per-feed Router, AISStream client, simulator |
-| `ui/` | MapLibre dark map UI, embedded into the binary |
+| `ui/` | Two embedded MapLibre UIs: the maritime map (`index.html`/`app.js`) and the air map (`icarus.html`/`icarus.js`), sharing `style.css` and `basemaps.js` |
 
 ---
 
@@ -151,6 +153,35 @@ fused directly onto that AIS track (sensor corroboration).
 `GGA`/`GLL`/`RMC` (position, speed, course) and `HDT` (heading) sentences on
 any feed establish own ship, drawn on the map and required for TTM
 range-bearing resolution.
+
+---
+
+### 3.5 ADS-B (aircraft) — Project Icarus
+
+| Source | Transport | Cost | Notes |
+|---|---|---|---|
+| [adsb.lol](https://adsb.lol) | HTTPS JSON (`/v2/point`, `/v2/mil`, `/v2/hex`) | free, no key | **Default.** Community receiver network, ADSBexchange v2 schema |
+| [OpenSky Network](https://opensky-network.org) | OAuth2 + REST `/api/states/all` | free account | Optional (`[icarus] opensky = true` + `OPENSKY_CLIENT_ID`/`OPENSKY_CLIENT_SECRET`); the only source that answers a *global civil* query |
+| [airplanes.live](https://airplanes.live) | same v2 schema | free, requires registration | Returns HTTP 403 to unregistered clients, so it is not a usable default |
+| Local RTL-SDR + readsb/dump1090 | SBS-1 / Beast over TCP | free | **Not implemented** — the best answer for zero-internet operation; roadmap Phase 1 |
+
+**How the query works.** Aircraft are not streamed like AIS; they are polled.
+The browser's viewport is the request: the server covers it with overlapping
+query circles (up to `max_circles` of `radius_nm`; provider maximum 250 nm) and
+queries a few per tick on a rotation, so a large grid refreshes over several
+ticks. With no browser watching, a home box (`home_lat`/`home_lon`) is swept
+instead, so detection keeps running unattended. The circles in force are
+published in every snapshot and drawn on the map as a dashed overlay.
+
+Two consequences, stated plainly in the UI rather than hidden:
+
+* **The public feed has a request budget.** Requests are serialized at
+  `min_request_gap_ms` and the client backs off hard on HTTP 429, showing
+  `RATE LIMITED` in the feed chip until it recovers.
+* **Coverage is receiver-bound**, exactly like AIS: dense over Europe and North
+  America, thin over Africa and South Asia. The one global exception is
+  `/v2/mil` — every military and government aircraft the network can hear,
+  worldwide, in a single request — which is what wide views display.
 
 ---
 
@@ -242,6 +273,30 @@ positive count (a false IUU badge would be a damaging accusation).
   `data/history/<day>.jsonl` and the GFW tab's scrubber reconstructs the
   picture nearest any recorded timestamp.
 
+### 7.1 The air map — Project Icarus (`/icarus`)
+
+A second UI, not a mode of the first: same chrome, air-domain payload.
+
+* **Domain switcher in both UIs** (top bar, plus a DATA DOMAIN block in the
+  LAYERS tab) so either map can jump to the other.
+* **Aircraft icons** are silhouettes by airframe class — swept-wing, rotor,
+  glider, balloon, ground — rotated by track and tinted by altitude band
+  (slate on ground, amber < 5 000 ft, green < 20 000, cyan < 35 000, violet
+  above), which makes the vertical structure of the picture legible at a glance.
+* **Detection rings** carry the alerts: red emergency, amber watchlist, white
+  military, grey lost-contact. Every detection is also a sidebar filter
+  (AIRBORNE / GROUND / EMERGENCY / MILITARY / WATCHED / LOST CONTACT).
+* **Detail drawer**: full state vector (baro/geometric altitude, selected
+  autopilot altitude, vertical rate, IAS/TAS/Mach, track vs heading, squawk with
+  its meaning, emitter category, signal strength), plus the network's airframe
+  record (owner/operator, manufacturer, model, year) fetched on demand, and a
+  one-click WATCH.
+* **Dead reckoning** extrapolates position along ground speed/track between
+  polls, capped at 90 s — driven by the server's `age_s`, so a skewed browser
+  clock cannot warp the picture.
+* **Altitudes are shown as flight levels** (FL297) alongside feet, because that
+  is how the airspace is actually worked.
+
 ---
 
 ## 8. Persistence and data model
@@ -253,9 +308,13 @@ positive count (a false IUU badge would be a damaging accusation).
 | `data/alerts.jsonl` | every alert ever raised (append-only audit log) |
 | `data/history/<yyyy-mm-dd>.jsonl` | position batches, one per `record_interval_s` |
 | `data/oceansentinel.log.<date>` | daily rotating application log |
+| `data/icarus/watchlist.json` | watched aircraft (hex / callsign / tail + note) |
+| `data/icarus/history/<yyyy-mm-dd>.jsonl` | aircraft position archive, written when `[icarus] record = true` |
 
 All runtime state lives under `[storage] dir` (default `data/`), gitignored.
-History is pruned to `retention_days`. Writes are atomic (temp file + rename)
+Both domains write their alerts into the one `data/alerts.jsonl` audit log
+(the air UI restores only the `aircraft_*` kinds on restart, so a ship alert
+never appears in the air feed). History is pruned to `retention_days`. Writes are atomic (temp file + rename)
 or append-only; persistence failures degrade to in-memory operation, never to
 a crash.
 
@@ -269,9 +328,12 @@ a crash.
   `Authorization: Bearer <token>` or `?token=<token>`; comparison is
   constant-time. The web UI prompts once and remembers (localStorage).
 * Startup warns loudly if a non-loopback bind has no token.
-* Secrets (API tokens) live only in `.env`, which is gitignored; `.env.example`
-  ships without values and the repository is swept for secrets before every
-  push.
+* Every air-domain route (`/api/icarus/*`, including its WebSocket) is behind
+  the same token check as the maritime API.
+* Secrets (API tokens) live only in `.env`, which is gitignored. There is no
+  `.env.example` in the repository — it was removed on purpose after a live
+  token was nearly committed — so the documented variables (see §11) are
+  created by hand. The tree is swept for token values before every push.
 
 ---
 
@@ -400,3 +462,8 @@ Windows executable.
 | **IUU** | Illegal, Unreported and Unregulated fishing |
 | **AOI** | Area of Interest — the map's opening view |
 | **Transshipment** | Cargo/crew transfer between vessels at sea (GFW ENCOUNTER events) |
+| **ADS-B** | Automatic Dependent Surveillance–Broadcast — aircraft position/identity broadcast in the clear on 1090 MHz |
+| **ICAO 24-bit address** | The aircraft's unique transponder identifier ("hex"); hex and callsign are the tail number equivalents of MMSI |
+| **Squawk** | Four-digit transponder code; 7500 unlawful interference, 7600 radio failure, 7700 general emergency |
+| **Flight level** | Altitude in hundreds of feet above the standard pressure datum (FL297 = 29 700 ft) |
+| **MLAT / TIS-B** | Position derived by multilateration / rebroadcast traffic information rather than direct ADS-B |

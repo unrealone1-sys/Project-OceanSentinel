@@ -17,8 +17,10 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, RwLock};
 use tracing::warn;
 
+use crate::adsb::AdsbClient;
 use crate::config::Config;
 use crate::gfw::GfwClient;
+use crate::icarus::{self, Area, IcarusMsg, IcarusStore, IcarusWatch};
 use crate::model::{WatchEntry, Zone};
 use crate::persist::{self, HistoryPoint};
 use crate::store::{SnapshotMeta, Store};
@@ -32,6 +34,13 @@ pub struct AppState {
     /// Parsed history per day, so the replay scrubber can scrub without
     /// re-reading files.
     pub history_cache: Arc<Mutex<Option<CachedHistory>>>,
+    /// Project Icarus — the aerospace domain served at `/icarus`.
+    pub icarus: Arc<RwLock<IcarusStore>>,
+    pub icarus_bcast: broadcast::Sender<IcarusMsg>,
+    /// The viewport the air map was last asked to cover; the poller reads it.
+    pub icarus_demand: Arc<RwLock<Option<(Area, std::time::Instant)>>>,
+    pub icarus_client: Arc<AdsbClient>,
+    pub icarus_enabled: bool,
 }
 
 pub struct CachedHistory {
@@ -66,6 +75,17 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/history", get(api_history))
         .route("/ws", get(ws_handler))
+        // Project Icarus — the aerospace domain.
+        .route("/api/icarus/health", get(icarus_health))
+        .route("/api/icarus/state", get(icarus_state))
+        .route("/api/icarus/aircraft", get(icarus_aircraft))
+        .route(
+            "/api/icarus/watchlist",
+            get(icarus_list_watch)
+                .post(icarus_add_watch)
+                .delete(icarus_delete_watch),
+        )
+        .route("/api/icarus/ws", get(icarus_ws_handler))
         .fallback(static_handler)
         .with_state(state)
 }
@@ -625,7 +645,9 @@ fn parse_bounds(v: &Value) -> Option<Bounds> {
 
 /// Trim a snapshot to the client's viewport. Zoomed-out views keep everything
 /// (clustering handles the density); zoomed-in views drop what cannot be seen.
-fn filter_snapshot(snapshot: Arc<Value>, bounds: Option<Bounds>) -> String {
+/// `key` is the array field holding the platforms ("tracks" for ships,
+/// "aircraft" for Project Icarus) — both feeds share this trimming.
+fn filter_snapshot(snapshot: Arc<Value>, bounds: Option<Bounds>, key: &str) -> String {
     let Some(b) = bounds else {
         return snapshot.to_string();
     };
@@ -635,7 +657,7 @@ fn filter_snapshot(snapshot: Arc<Value>, bounds: Option<Bounds>) -> String {
     let covers_world = (e - w) >= 200.0 || (n - s) >= 100.0;
 
     let total = snapshot
-        .get("tracks")
+        .get(key)
         .and_then(|t| t.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
@@ -644,7 +666,7 @@ fn filter_snapshot(snapshot: Arc<Value>, bounds: Option<Bounds>) -> String {
             // sending the whole planet: trails would dominate the payload, and
             // at world zoom they are sub-pixel anyway
             let mut trimmed = (*snapshot).clone();
-            if let Some(arr) = trimmed.get_mut("tracks").and_then(|t| t.as_array_mut()) {
+            if let Some(arr) = trimmed.get_mut(key).and_then(|t| t.as_array_mut()) {
                 for t in arr.iter_mut() {
                     if let Some(obj) = t.as_object_mut() {
                         obj.insert("trail".to_string(), json!([]));
@@ -657,7 +679,7 @@ fn filter_snapshot(snapshot: Arc<Value>, bounds: Option<Bounds>) -> String {
     }
 
     let mut out = (*snapshot).clone();
-    let taken = std::mem::take(out.get_mut("tracks").unwrap_or(&mut Value::Null));
+    let taken = std::mem::take(out.get_mut(key).unwrap_or(&mut Value::Null));
     let kept: Vec<Value> = taken
         .as_array()
         .map(|arr| {
@@ -673,8 +695,8 @@ fn filter_snapshot(snapshot: Arc<Value>, bounds: Option<Bounds>) -> String {
         .unwrap_or_default();
     let hidden = total - kept.len();
     if let Some(obj) = out.as_object_mut() {
-        obj.insert("tracks".to_string(), Value::Array(kept));
-        obj.insert("hidden_tracks".to_string(), json!(hidden));
+        obj.insert(key.to_string(), Value::Array(kept));
+        obj.insert(format!("hidden_{key}"), json!(hidden));
     }
     out.to_string()
 }
@@ -702,7 +724,7 @@ async fn ws_loop(socket: WebSocket, st: AppState) {
         tokio::select! {
             msg = rx.recv() => match msg {
                 Ok(ServerMsg::State(snap)) => {
-                    let text = filter_snapshot(snap, viewport);
+                    let text = filter_snapshot(snap, viewport, "tracks");
                     if sender.send(Message::Text(text.into())).await.is_err() {
                         break;
                     }
@@ -744,9 +766,270 @@ async fn ws_loop(socket: WebSocket, st: AppState) {
     }
 }
 
+/* ------------------------------------------- Project Icarus (aerospace/ADS-B) */
+
+fn icarus_meta(st: &AppState) -> icarus::IcarusMeta {
+    let c = &st.cfg.icarus;
+    icarus::IcarusMeta {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        provider: icarus::provider_name(c),
+        opensky: st.icarus_client.opensky_enabled(),
+        recording: c.record,
+        home: c.home(),
+        radius_nm: c.radius_nm,
+        global_mil: c.global_mil,
+        trail_limit: c.trail_points,
+        auth_required: st
+            .cfg
+            .server
+            .api_token
+            .as_deref()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false),
+    }
+}
+
+async fn icarus_health(State(st): State<AppState>, Query(_q): Query<TokenQuery>) -> Json<Value> {
+    let s = st.icarus.read().await;
+    Json(json!({
+        "ok": true,
+        "app": "icarus",
+        "project": "Icarus",
+        "domain": "air",
+        "enabled": st.icarus_enabled,
+        "version": env!("CARGO_PKG_VERSION"),
+        "provider": icarus::provider_name(&st.cfg.icarus),
+        "opensky": st.icarus_client.opensky_enabled(),
+        "aircraft": s.tracks.len(),
+        "mode": s.mode,
+        "feed_ok": s.client_stats.ok,
+        "requests": s.client_stats.requests,
+        "last_error": s.client_stats.last_error,
+    }))
+}
+
+async fn icarus_state(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+) -> Result<Json<Value>, ApiError> {
+    guard(&st, &headers, q.token.as_deref())?;
+    let s = st.icarus.read().await;
+    Ok(Json(s.snapshot(&icarus_meta(&st))))
+}
+
+#[derive(Deserialize)]
+struct AircraftQuery {
+    hex: Option<String>,
+    token: Option<String>,
+}
+
+/// Full airframe record: the live track we hold plus whatever the network
+/// knows about the airframe itself (owner, operator, model).
+async fn icarus_aircraft(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AircraftQuery>,
+) -> Result<Json<Value>, ApiError> {
+    guard(&st, &headers, q.token.as_deref())?;
+    let hex = q
+        .hex
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| ApiError::bad_request("hex=<icao24> is required, e.g. hex=40643d"))?
+        .to_ascii_lowercase();
+    if hex.len() != 6 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(ApiError::bad_request(
+            "hex must be a 6-character ICAO 24-bit address, e.g. 40643d",
+        ));
+    }
+    let live = {
+        let s = st.icarus.read().await;
+        s.tracks
+            .get(&hex)
+            .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+    };
+    let detail = st.icarus_client.detail(&hex).await.unwrap_or(Value::Null);
+    Ok(Json(json!({
+        "hex": hex,
+        "live": live,
+        "detail": detail,
+        "fetched_at": Utc::now(),
+    })))
+}
+
+async fn icarus_list_watch(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+) -> Result<Json<Value>, ApiError> {
+    guard(&st, &headers, q.token.as_deref())?;
+    let s = st.icarus.read().await;
+    Ok(Json(json!({"watchlist": s.watchlist})))
+}
+
+#[derive(Deserialize)]
+struct IcarusWatchIn {
+    hex: Option<String>,
+    callsign: Option<String>,
+    registration: Option<String>,
+    note: Option<String>,
+}
+
+async fn icarus_add_watch(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+    Json(w): Json<IcarusWatchIn>,
+) -> Result<Json<Value>, ApiError> {
+    guard(&st, &headers, q.token.as_deref())?;
+    let clean = |v: Option<String>| v.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let hex = clean(w.hex).map(|h| h.to_ascii_lowercase());
+    let callsign = clean(w.callsign);
+    let registration = clean(w.registration);
+    if hex.is_none() && callsign.is_none() && registration.is_none() {
+        return Err(ApiError::bad_request(
+            "give at least one of hex, callsign or registration to watch for",
+        ));
+    }
+    if let Some(h) = hex.as_deref() {
+        if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(ApiError::bad_request(
+                "hex must be a 6-character ICAO 24-bit address, e.g. 40643d",
+            ));
+        }
+    }
+    let entry = IcarusWatch {
+        id: uuid::Uuid::new_v4().to_string(),
+        hex,
+        callsign,
+        registration,
+        note: clean(w.note),
+        added: Utc::now(),
+    };
+    {
+        let mut s = st.icarus.write().await;
+        s.watchlist.push(entry.clone());
+        s.save_watchlist();
+    }
+    let _ = st.icarus_bcast.send(IcarusMsg::Watch);
+    Ok(Json(json!({"entry": entry})))
+}
+
+async fn icarus_delete_watch(
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ZoneQuery>,
+) -> Result<Json<Value>, ApiError> {
+    guard(&st, &headers, q.token.as_deref())?;
+    let mut s = st.icarus.write().await;
+    let before = s.watchlist.len();
+    s.watchlist.retain(|x| x.id != q.id);
+    let removed = before - s.watchlist.len();
+    s.save_watchlist();
+    drop(s);
+    let _ = st.icarus_bcast.send(IcarusMsg::Watch);
+    Ok(Json(json!({"removed": removed})))
+}
+
+async fn icarus_ws_handler(
+    ws: WebSocketUpgrade,
+    State(st): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+) -> Response {
+    if guard(&st, &headers, q.token.as_deref()).is_err() {
+        return (
+            StatusCode::UNAUTHORIZED,
+            "missing or invalid API token (append ?token=... to the WebSocket URL)",
+        )
+            .into_response();
+    }
+    ws.on_upgrade(move |socket| icarus_ws_loop(socket, st))
+}
+
+async fn icarus_ws_loop(socket: WebSocket, st: AppState) {
+    let (mut sender, mut receiver) = socket.split();
+
+    {
+        let s = st.icarus.read().await;
+        let snap = Arc::new(s.snapshot(&icarus_meta(&st)));
+        drop(s);
+        if sender
+            .send(Message::Text(snap.to_string().into()))
+            .await
+            .is_err()
+        {
+            return;
+        }
+    }
+
+    let mut rx = st.icarus_bcast.subscribe();
+    let mut viewport: Option<Bounds> = None;
+
+    loop {
+        tokio::select! {
+            msg = rx.recv() => match msg {
+                Ok(IcarusMsg::State(snap)) => {
+                    let text = filter_snapshot(snap, viewport, "aircraft");
+                    if sender.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(IcarusMsg::Alert(alert)) => {
+                    let text = json!({"type": "alert", "alert": alert}).to_string();
+                    if sender.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(IcarusMsg::Watch) => {
+                    let text = json!({"type": "watch"}).to_string();
+                    if sender.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    warn!("air map client lagged {n} messages");
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            },
+            incoming = receiver.next() => match incoming {
+                Some(Ok(Message::Text(t))) => {
+                    if let Ok(v) = serde_json::from_str::<Value>(t.as_str()) {
+                        if v.get("type").and_then(|x| x.as_str()) == Some("viewport") {
+                            viewport = if v.get("bounds").map(|b| !b.is_null()).unwrap_or(false) {
+                                parse_bounds(&v)
+                            } else {
+                                None
+                            };
+                            // Hand the viewport to the poller: it decides which
+                            // circles to query, so the receiver network is only
+                            // asked about airspace somebody is looking at.
+                            if let Some(b) = viewport {
+                                let area = Area { w: b.w, s: b.s, e: b.e, n: b.n };
+                                *st.icarus_demand.write().await =
+                                    Some((area, std::time::Instant::now()));
+                            }
+                        }
+                    }
+                }
+                Some(Ok(Message::Close(_))) | None => break,
+                Some(Err(_)) => break,
+                _ => {}
+            },
+        }
+    }
+}
+
 async fn static_handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
-    let path = if path.is_empty() { "index.html" } else { path };
+    let path = match path {
+        "" => "index.html",
+        // Project Icarus is a page of its own: /icarus
+        "icarus" | "icarus/" => "icarus.html",
+        other => other,
+    };
     match Assets::get(path) {
         Some(f) => (
             [(header::CONTENT_TYPE, mime_for(path))],
