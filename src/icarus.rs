@@ -819,6 +819,9 @@ impl Icarus {
         }
         let mut ticker = tokio::time::interval(Duration::from_millis(poll));
         let mut cursor = 0usize;
+        // When each upstream query path was last asked, so the same question is
+        // never repeated inside the cooldown (see `path_cooldown_s`).
+        let mut last_path: HashMap<String, Instant> = HashMap::new();
         let mut last_mil = Instant::now() - Duration::from_secs(86_400);
         let mut last_opensky = Instant::now() - Duration::from_secs(86_400);
         let mut last_prune: Option<DateTime<Utc>> = None;
@@ -869,8 +872,23 @@ impl Icarus {
                 debug!("air sweep resting {wait:.0}s to stay inside the feed's request budget");
             }
             if n > 0 && affordable {
-                for k in 0..per_tick {
-                    let c = plan.circles[(cursor + k) % n];
+                let cooldown = Duration::from_secs(self.cfg.path_cooldown_s.max(1));
+                let mut asked = 0usize;
+                for k in 0..n {
+                    if asked >= per_tick {
+                        break;
+                    }
+                    let idx = (cursor + k) % n;
+                    let c = plan.circles[idx];
+                    let path = query_key(&c);
+                    if let Some(at) = last_path.get(&path) {
+                        if at.elapsed() < cooldown {
+                            continue;
+                        }
+                    }
+                    last_path.insert(path, Instant::now());
+                    asked += 1;
+                    cursor = (idx + 1) % n;
                     match self.client.point(c.lat, c.lon, c.radius_nm).await {
                         Ok(list) => {
                             issued += 1;
@@ -884,7 +902,14 @@ impl Icarus {
                         ),
                     }
                 }
-                cursor = (cursor + per_tick) % n;
+                if asked == 0 {
+                    // every circle in view is inside its cooldown: politely do
+                    // nothing this tick rather than repeat an upstream query
+                    debug!("all circles are inside their {cooldown:?} query cooldown; resting");
+                }
+                if last_path.len() > 512 {
+                    last_path.retain(|_, at| at.elapsed() < cooldown * 4);
+                }
             }
 
             // The one query that reaches the whole planet.
@@ -993,6 +1018,17 @@ impl Icarus {
             let _ = self.bcast.send(IcarusMsg::State(snap));
         }
     }
+}
+
+/// The upstream query path for a circle. Two circles that round to the same
+/// four decimals are the same upstream question.
+fn query_key(c: &adsb::Circle) -> String {
+    format!(
+        "/v2/point/{:.4}/{:.4}/{}",
+        c.lat,
+        c.lon,
+        c.radius_nm.round() as u32
+    )
 }
 
 /// Provider label for logs and the UI (derived from the configured base URL).
@@ -1342,6 +1378,42 @@ mod tests {
         // the interval gate keeps a second call from writing again
         s.record(&p, now + chrono::Duration::seconds(5), 300);
         assert_eq!(persist::load_lines(&file).len(), 1);
+    }
+
+    #[test]
+    fn query_keys_identify_identical_upstream_questions() {
+        let a = adsb::Circle {
+            lat: 51.46671,
+            lon: -0.45001,
+            radius_nm: 250.0,
+        };
+        let same = adsb::Circle {
+            lat: 51.46674,
+            lon: -0.45004,
+            radius_nm: 250.0,
+        };
+        let other = adsb::Circle {
+            lat: 51.5,
+            lon: -0.45,
+            radius_nm: 250.0,
+        };
+        let smaller = adsb::Circle {
+            lat: 51.46671,
+            lon: -0.45001,
+            radius_nm: 180.0,
+        };
+        assert_eq!(query_key(&a), query_key(&same), "same question, same key");
+        assert_ne!(
+            query_key(&a),
+            query_key(&other),
+            "moved circle is a new question"
+        );
+        assert_ne!(
+            query_key(&a),
+            query_key(&smaller),
+            "radius is part of the path"
+        );
+        assert!(query_key(&a).ends_with("/250"));
     }
 
     #[test]

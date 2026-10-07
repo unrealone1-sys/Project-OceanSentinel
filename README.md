@@ -285,10 +285,11 @@ Two things are worth understanding before reading the map:
   of implied.
 * **The public feed has a request budget.** Measured: roughly one request every
   15 s is sustainable, while a burst of five within 20 s gets blocked. The
-  client spends that budget deliberately — few large (250 nm) circles, a rotating
-  sweep, a once-a-minute global military query — backs off automatically on HTTP
-  429, and shows `RATE LIMITED · RESTING` rather than pretending. Aircraft stay on
-  screen and age while the sweep rests.
+  client spends that budget deliberately — few large (250 nm) circles on a
+  rotating sweep, a global military query every couple of minutes, never the
+  same upstream question twice inside `path_cooldown_s` — backs off
+  automatically on HTTP 429, and shows `RATE LIMITED · RESTING` rather than
+  pretending. Aircraft stay on screen and age while the sweep rests.
 
 ```toml
 [icarus]
@@ -297,8 +298,9 @@ base_url = "https://api.adsb.lol"
 poll_ms = 8000          # tick cadence
 queries_per_tick = 1    # circles per tick
 radius_nm = 250         # provider maximum
-burst_requests = 2      # per burst_window_s
-burst_window_s = 40
+burst_requests = 4      # per burst_window_s
+burst_window_s = 60
+path_cooldown_s = 30    # never repeat the same query path inside this window
 global_mil = true       # worldwide military sweep, one request
 [[icarus.watch]]
 callsign = "RCH123"

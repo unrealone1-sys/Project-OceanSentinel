@@ -269,6 +269,11 @@ pub struct IcarusCfg {
     /// drag from getting the client blocked.
     pub burst_requests: u32,
     pub burst_window_s: u64,
+    /// Never repeat an identical upstream query path inside this many seconds.
+    /// The provider's limiter keys on the path (measured: a stationary view
+    /// repeats one URL and starts getting 429s, while varied paths keep
+    /// working), so this — not the total rate — is what keeps the feed clean.
+    pub path_cooldown_s: u64,
     /// Where to look when no browser is watching.
     pub home_lat: f64,
     pub home_lon: f64,
@@ -312,12 +317,13 @@ impl Default for IcarusCfg {
             // scarce resource (250 nm is the provider's maximum).
             radius_nm: 250,
             max_circles: 4,
-            min_request_gap_ms: 2500,
+            min_request_gap_ms: 12_000,
+            path_cooldown_s: 30,
             // Measured against the public feed: one request every 15 s is
             // sustainable indefinitely, a burst of ~5 in 20 s is not. Two per
             // 40 s plus the once-a-minute military sweep sits just under it.
-            burst_requests: 2,
-            burst_window_s: 40,
+            burst_requests: 4,
+            burst_window_s: 60,
             // Default air picture: the busiest ADS-B airspace on earth, so a
             // fresh install has something to look at before anyone moves the map.
             home_lat: 51.47,
@@ -328,7 +334,7 @@ impl Default for IcarusCfg {
             lost_contact_s: 300,
             drop_after_s: 1800,
             global_mil: true,
-            mil_interval_s: 90,
+            mil_interval_s: 150,
             alert_emergency: true,
             alert_military: false,
             alert_lost: true,

@@ -100,6 +100,13 @@ delivery pipeline; the stores, channels, watchlists and UI pages are separate.
   `Budget` token bucket (`src/adsb.rs`) plus the poller's "skip a tick I cannot
   afford" check are what keep the app off the block list. A 429 triggers an
   exponentially growing hold-off that halves on success — do not remove it.
+  **The limiter keys on the query path, not just the total rate.** Observed in
+  the request log: a stationary viewport repeats one identical
+  `/v2/point/lat/lon/250` URL and starts getting 429s after a handful of
+  repeats, while probes that varied the path ran 21 requests clean. Hence
+  `path_cooldown_s` (default 30): the same upstream question is never asked
+  twice inside the window, and a tick whose circles are all cooling simply
+  rests. Removing that cooldown reintroduces the throttling cycle.
   Because the sweep is slow, the lost-contact threshold is *stretched* to the
   observed refresh cycle (`lost_after_s`); a fixed threshold would fire false
   alerts purely from circle rotation.

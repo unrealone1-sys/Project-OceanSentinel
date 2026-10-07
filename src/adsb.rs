@@ -407,10 +407,14 @@ impl AdsbClient {
     }
 
     async fn get_json(&self, url: &str) -> Result<Value> {
+        let path = url.strip_prefix(&self.base).unwrap_or(url).to_string();
         self.acquire().await;
         {
-            self.stats.lock().await.requests += 1;
+            let mut s = self.stats.lock().await;
+            s.requests += 1;
+            s.backoff_s = 0;
         }
+        tracing::debug!("ADS-B upstream request #{path}");
         let resp = match self.http.get(url).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -427,10 +431,10 @@ impl AdsbClient {
             s.ok = false;
             s.backoff_s = secs;
             s.last_error = Some(format!(
-                "rate limited by the ADS-B provider (HTTP 429) — holding off {secs}s"
+                "rate limited on {path} (HTTP 429) — holding off {secs}s"
             ));
             drop(s);
-            bail!("ADS-B provider rate limit reached (HTTP 429) — holding off {secs}s");
+            bail!("ADS-B rate limit on {path} (HTTP 429) — holding off {secs}s");
         }
         if !status.is_success() {
             self.record_error(format!("HTTP {status}")).await;
@@ -452,6 +456,7 @@ impl AdsbClient {
         Ok(v)
     }
 
+    /// The query path a 429 came from, used for the operator-facing message.
     async fn record_error(&self, msg: String) {
         let mut s = self.stats.lock().await;
         s.ok = false;

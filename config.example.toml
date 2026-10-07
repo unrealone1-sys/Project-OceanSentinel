@@ -148,12 +148,20 @@ radius_nm = 250
 # Hard ceiling on circles per sweep. Wide views beyond this switch to the
 # global military sweep instead of pretending to cover a continent.
 max_circles = 4
-# Minimum spacing between two requests, so a viewport drag cannot machine-gun
-# the provider.
-min_request_gap_ms = 2500
-# Burst allowance: at most this many requests per `burst_window_s`.
-burst_requests = 2
-burst_window_s = 40
+# Minimum spacing between two requests. Measured upstream: spaced ~15 s apart
+# the feed never complains, while two requests a second apart start the 429s.
+min_request_gap_ms = 12000
+# Never ask the same upstream query again inside this window. The provider's
+# limiter keys on the path: a stationary map repeats one identical URL and
+# starts getting 429s, while varied paths keep working. This is the setting
+# that matters most for staying unblocked.
+path_cooldown_s = 30
+# Burst allowance: at most this many requests per `burst_window_s`, on top of
+# the per-path cooldown above.
+burst_requests = 4
+# Never ask the same upstream query again inside this window (seconds).
+path_cooldown_s = 30
+burst_window_s = 60
 
 # Where the air map looks when no browser has it open (alerts keep flowing).
 # Default is the busiest ADS-B airspace on earth. Point it at your local
@@ -179,7 +187,7 @@ drop_after_s = 1800
 # request. Cheap (once a minute) and the only genuinely global layer available
 # without a paid feed.
 global_mil = true
-mil_interval_s = 90
+mil_interval_s = 150
 
 # Alerts. Emergency squawks (7500/7600/7700) are on by default; military by
 # default is off because it fires a lot in some regions.
