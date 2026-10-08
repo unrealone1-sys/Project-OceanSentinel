@@ -297,6 +297,29 @@ A second UI, not a mode of the first: same chrome, air-domain payload.
 * **Altitudes are shown as flight levels** (FL297) alongside feet, because that
   is how the airspace is actually worked.
 
+### 7.2 Day / night and time zones (both maps)
+
+`ui/daylight.js` draws the solar terminator the way a solar-eclipse chart does —
+a shaded night side with soft twilight bands — plus the sun's own position and
+one meridian per whole solar hour.
+
+* Four nested thresholds of **sun elevation**: 0° (night), −6° (civil twilight),
+  −12° (nautical), −18° (astronomical). Each is an exact boundary; stacked they
+  read as a penumbra gradient.
+* The terminator line, the solar-noon meridian and the sub-solar point are drawn
+  on top, and the cursor readout gives **local solar time** and the solar hour
+  zone for whatever you point at.
+* Layer stack sits directly above the basemap and below every data layer, so it
+  works over all seven basemaps without dimming traffic. Toggle it per map in
+  the LAYERS tab.
+* Accuracy is verified rather than assumed: on every band boundary the computed
+  solar elevation equals the threshold to **0.0000°**, and band coverage was
+  checked against the elevation sign for 32 cities × 4 bands × 4 seasons (0
+  mismatches). The terminator is a great circle, split at the antimeridian.
+* The meridians mark *solar* hours, not political zones — India is UTC+5:30 and
+  China spans five solar hours on one zone, so the labels read UTC±N and the
+  legend says so.
+
 ---
 
 ## 8. Persistence and data model

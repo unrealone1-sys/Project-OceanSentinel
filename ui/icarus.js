@@ -55,7 +55,15 @@ const state = {
   sortBy: 'priority',
   detections: { emergency: true, military: true, watchlist: true, lost: true },
   flightState: { airborne: true, ground: true },
-  layers: { icons: true, labels: true, trails: true, rings: true, circles: true },
+  layers: {
+    icons: true,
+    labels: true,
+    trails: true,
+    rings: true,
+    circles: true,
+    night: true,
+    meridians: true,
+  },
   wsOk: false,
   firstState: true,
   userMoved: false,
@@ -518,6 +526,11 @@ function setupAirLayers() {
     },
   });
 
+  // Day/night marking and UTC hour meridians: their own stack, inserted right
+  // above the basemap so they show over every basemap style without dimming
+  // the aircraft drawn on top.
+  if (window.OSDaylight) OSDaylight.attach(map, { before: 'graticule' });
+
   applyLayerVisibility();
   pushData();
 }
@@ -541,7 +554,13 @@ if (map.loaded()) {
 }
 
 map.on('mousemove', (e) => {
-  document.getElementById('cursor-readout').textContent = `${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)}`;
+  let when = '';
+  if (window.OSDaylight) {
+    const s = OSDaylight.localSolar(new Date(), e.lngLat.lng);
+    when = ` · solar ${s.time} · ${s.zone}`;
+  }
+  document.getElementById('cursor-readout').textContent =
+    `${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)}${when}`;
 });
 
 map.on('click', (e) => {
@@ -721,6 +740,10 @@ function applyLayerVisibility() {
   v('ac-rings', state.layers.rings);
   v('circles-fill', state.layers.circles);
   v('circles-line', state.layers.circles);
+  // day/night marking owns its own layers (daylight.js)
+  if (window.OSDaylight) {
+    OSDaylight.setVisible({ night: state.layers.night, meridians: state.layers.meridians });
+  }
 }
 
 function pushData() {
@@ -798,10 +821,6 @@ function connect() {
 
 function applyState(msg) {
   bootFirstState = true;
-  // Real data is the signal that the intro has done its job: finish it now
-  // rather than climbing, because a background tab may only get one timer tick
-  // per minute and the overlay would otherwise linger for minutes.
-  bootFinishSoon();
   const pp = document.getElementById('page-progress');
   if (pp && !pp.classList.contains('hidden')) {
     pageProgress(1);
@@ -1366,7 +1385,11 @@ const BOOT_MESSAGES = [
 let bootDone = false;
 let bootState = 0;
 let bootFirstState = false;
+/// When this page started loading, so the intro can report its own duration
+/// (`window.__bootMs`) instead of the timing being a matter of opinion.
+const bootStartMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
+/// Slim loading strip along the top edge (mirrors boot %, then WS state).
 function pageProgress(frac) {
   const el = document.getElementById('page-progress');
   if (el) el.style.width = `${Math.round(frac * 100)}%`;
@@ -1377,6 +1400,13 @@ function bootFinish() {
   bootDone = true;
   try {
     sessionStorage.setItem('os.boot.air', '1');
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    window.__bootMs = Math.round(
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) - bootStartMs
+    );
   } catch (e) {
     /* ignore */
   }
@@ -1393,79 +1423,77 @@ function bootSkip() {
   bootState = Math.max(bootState, 97);
 }
 
-/// Fill the bar and fade out, independent of timer cadence.
-function bootFinishSoon() {
-  if (bootDone) return;
-  bootState = 100;
-  const fill = document.getElementById('boot-fill');
-  if (fill) fill.style.width = '100%';
-  const pct = document.getElementById('boot-pct');
-  if (pct) pct.textContent = '100%';
-  setTimeout(bootFinish, 420);
-}
-
+/* Both maps run this same sequence — same tick, same easing, same message
+   dwell, same data-gated finish — so the two pages feel like one product.
+   Keep the constants in step with the other page when tuning. */
 function runBoot() {
-  const boot = document.getElementById('boot');
+  const el = document.getElementById('boot');
+  if (!el) return;
   let fast = false;
   try {
     fast = sessionStorage.getItem('os.boot.air') === '1';
   } catch (e) {
     /* ignore */
   }
-  const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reduced) {
+  if (fast) el.classList.add('boot-fast');
+  if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     bootFinish();
     return;
   }
-  if (boot) boot.classList.toggle('boot-fast', fast);
-
-  const tickMs = fast ? 16 : 55;
-  const factor = fast ? 0.08 : 0.035;
-  const floor = fast ? 1 : 0.6;
+  document.addEventListener('keydown', bootSkip);
+  document.addEventListener('click', bootSkip);
 
   const fill = document.getElementById('boot-fill');
   const pct = document.getElementById('boot-pct');
   const status = document.getElementById('boot-status');
-  const chips = [...document.querySelectorAll('.boot-chips span')];
+  const chips = [...el.querySelectorAll('.boot-chips span')];
+  const tickMs = fast ? 16 : 55;
+  const factor = fast ? 0.08 : 0.03;
+  const floor = fast ? 1 : 0.55;
+  let msgIdx = 0;
 
-  document.addEventListener('keydown', bootSkip);
-  document.addEventListener('click', bootSkip);
-  // Safety net: an intro must never outlive its welcome, whatever the tab
-  // throttling or network does.
-  setTimeout(bootFinishSoon, fast ? 1500 : 12000);
-
-  let msgIndex = 0;
-  const advanceMsg = () => {
-    if (status && BOOT_MESSAGES[msgIndex]) status.textContent = BOOT_MESSAGES[msgIndex];
-    chips.forEach((c, i) => c.classList.toggle('on', i <= msgIndex));
-    msgIndex++;
-  };
-  advanceMsg();
   const msgTimer = setInterval(() => {
-    if (msgIndex >= BOOT_MESSAGES.length) {
-      clearInterval(msgTimer);
-      return;
-    }
-    advanceMsg();
-  }, fast ? 90 : 620);
+    if (bootDone || !status) return clearInterval(msgTimer);
+    status.textContent = BOOT_MESSAGES[msgIdx % BOOT_MESSAGES.length];
+    msgIdx += 1;
+  }, fast ? 90 : 650);
+
+  // Safety net, not a shortcut: a background tab gets roughly one timer call
+  // per minute, and an intro must never outlive the map it covers. It fires
+  // well after the normal sequence, so the ordinary timing is unaffected.
+  const net = setTimeout(
+    () => {
+      bootState = Math.max(bootState, 99.5);
+    },
+    fast ? 2000 : 12000
+  );
 
   const tick = setInterval(() => {
+    if (bootDone) return clearInterval(tick);
+    // the bar stalls just short of done until real data arrives, so the
+    // animation ends when the map is actually live — never before
     const cap = bootFirstState ? 100 : fast ? 80 : 88;
-    // Once real data has arrived, finish promptly even in a background tab
-    // where the browser clamps timers to roughly one call per minute.
+    // once real data has arrived, finish quickly even in throttled background
+    // tabs (browsers clamp background timers to ~1/min)
     const effFloor = bootFirstState ? Math.max(floor, 3) : floor;
     bootState = Math.min(cap, bootState + Math.max(effFloor, (cap - bootState) * factor));
     if (fill) fill.style.width = `${bootState.toFixed(1)}%`;
-    if (pct) pct.textContent = `${Math.round(bootState)}%`;
+    if (pct) pct.textContent = `${Math.floor(bootState)}%`;
+    pageProgress(bootState / 100);
+    chips.forEach((c, i) => {
+      if (bootState >= (i + 1) * (100 / chips.length) - 8) c.classList.add('on');
+    });
     if (bootState >= 100) {
       clearInterval(tick);
       clearInterval(msgTimer);
+      clearTimeout(net);
       bootFinish();
     }
   }, tickMs);
 }
 
 runBoot();
+
 renderFilters();
 connect();
 setInterval(() => {

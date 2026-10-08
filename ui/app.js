@@ -26,7 +26,16 @@ const state = {
   standalone: null,
   search: '',
   filters: { ais: true, sonar: true, lidar: true, dark: true },
-  layers: { tracks: true, labels: true, trails: true, own: true, zones: true, gfw: true },
+  layers: {
+    tracks: true,
+    labels: true,
+    trails: true,
+    own: true,
+    zones: true,
+    gfw: true,
+    night: true,
+    meridians: true,
+  },
   wsOk: false,
   firstState: true,
   userMoved: false,
@@ -492,6 +501,11 @@ function setupMapLayers() {
     paint: { 'line-color': '#38bdf8', 'line-width': 1.6, 'line-dasharray': [4, 3] },
   });
 
+  // Day/night marking and UTC hour meridians: their own stack, inserted right
+  // above the basemap so they show over every basemap style without dimming
+  // the tracks drawn on top.
+  if (window.OSDaylight) OSDaylight.attach(map, { before: 'graticule' });
+
   applyLayerVisibility();
   pushData();
 }
@@ -513,8 +527,15 @@ if (map.loaded()) {
 }
 
 map.on('mousemove', (e) => {
+  // the readout also answers "what time is it there", which is most of what
+  // the terminator is for
+  let when = '';
+  if (window.OSDaylight) {
+    const s = OSDaylight.localSolar(new Date(), e.lngLat.lng);
+    when = ` · solar ${s.time} · ${s.zone}`;
+  }
   document.getElementById('cursor-readout').textContent =
-    `${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)}`;
+    `${e.lngLat.lat.toFixed(5)}, ${e.lngLat.lng.toFixed(5)}${when}`;
 });
 
 map.on('click', (e) => {
@@ -850,6 +871,10 @@ function applyLayerVisibility() {
   v('gfw-circles', state.layers.gfw);
   v('own-icon', state.layers.own);
   v('own-ring', state.layers.own);
+  // day/night marking owns its own layers (daylight.js)
+  if (window.OSDaylight) {
+    OSDaylight.setVisible({ night: state.layers.night, meridians: state.layers.meridians });
+  }
 }
 
 /* ------------------------------------------------------------------- ws */
@@ -1745,6 +1770,9 @@ const BOOT_MESSAGES = [
 let bootDone = false;
 let bootState = 0;
 let bootFirstState = false;
+/// When this page started loading, so the intro can report its own duration
+/// (`window.__bootMs`) instead of the timing being a matter of opinion.
+const bootStartMs = typeof performance !== 'undefined' ? performance.now() : Date.now();
 
 /// Slim loading strip along the top edge (mirrors boot %, then WS state).
 function pageProgress(frac) {
@@ -1757,6 +1785,13 @@ function bootFinish() {
   bootDone = true;
   try {
     sessionStorage.setItem('os.boot', '1');
+  } catch (e) {
+    /* ignore */
+  }
+  try {
+    window.__bootMs = Math.round(
+      (typeof performance !== 'undefined' ? performance.now() : Date.now()) - bootStartMs
+    );
   } catch (e) {
     /* ignore */
   }
@@ -1773,6 +1808,9 @@ function bootSkip() {
   bootState = Math.max(bootState, 97);
 }
 
+/* Both maps run this same sequence — same tick, same easing, same message
+   dwell, same data-gated finish — so the two pages feel like one product.
+   Keep the constants in step with the other page when tuning. */
 function runBoot() {
   const el = document.getElementById('boot');
   if (!el) return;
@@ -1805,11 +1843,21 @@ function runBoot() {
     msgIdx += 1;
   }, fast ? 90 : 650);
 
+  // Safety net, not a shortcut: a background tab gets roughly one timer call
+  // per minute, and an intro must never outlive the map it covers. It fires
+  // well after the normal sequence, so the ordinary timing is unaffected.
+  const net = setTimeout(
+    () => {
+      bootState = Math.max(bootState, 99.5);
+    },
+    fast ? 2000 : 12000
+  );
+
   const tick = setInterval(() => {
     if (bootDone) return clearInterval(tick);
     // the bar stalls just short of done until real data arrives, so the
     // animation ends when the map is actually live — never before
-    const cap = bootFirstState ? 100 : (fast ? 80 : 88);
+    const cap = bootFirstState ? 100 : fast ? 80 : 88;
     // once real data has arrived, finish quickly even in throttled background
     // tabs (browsers clamp background timers to ~1/min)
     const effFloor = bootFirstState ? Math.max(floor, 3) : floor;
@@ -1822,10 +1870,13 @@ function runBoot() {
     });
     if (bootState >= 100) {
       clearInterval(tick);
+      clearInterval(msgTimer);
+      clearTimeout(net);
       bootFinish();
     }
   }, tickMs);
 }
 
 runBoot();
+
 connect();

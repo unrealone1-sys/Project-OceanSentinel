@@ -310,6 +310,20 @@ note = "government flight"
 The air map has its own watchlist (`data/icarus/watchlist.json`) and can archive
 positions to `data/icarus/history/<day>.jsonl` with `record = true`.
 
+## Day / night and time zones
+
+Both maps carry a solar day/night overlay, drawn like an eclipse chart: the
+night side is shaded through four exact sun-elevation thresholds — 0°, −6°
+civil, −12° nautical, −18° astronomical twilight — so the edge of darkness
+fades through real twilight bands instead of ending on a hard line. The
+sub-solar point, the solar-noon meridian and a meridian for each whole solar
+hour are drawn over it, and the cursor readout gives local solar time.
+
+It sits above whichever basemap you pick and below the traffic, and it can be
+switched off in the LAYERS tab of either map. Boundaries are exact (verified to
+0.0000° against the solar-elevation definition); the hour meridians show *solar*
+hours, which is not the same as political time zones.
+
 ## The map
 
 * **Built for worldwide feeds**: markers are clustered below zoom 8, snapshots

@@ -131,6 +131,20 @@ delivery pipeline; the stores, channels, watchlists and UI pages are separate.
 * **Two embedded fonts/paths matter**: glyphs come from
   `fonts.openmaptiles.org` and every text layer must name a font that exists
   there (`Open Sans Regular`), or MapLibre silently renders no text at all.
+* **The day/night overlay is client-side astronomy (`ui/daylight.js`), shared by
+  both maps.** Four nested solar-elevation bands (0 / −6 / −12 / −18°) drawn as
+  fills whose colour and opacity ride on the features, so one layer paints the
+  twilight gradient. Two traps live here: (1) a band is a spherical cap around
+  the *antisolar* point, and the deeper bands do **not** reach the dark pole for
+  most of the year — a pole-anchored construction silently loses them over half
+  the world (that bug shipped for one build and was caught by testing band
+  coverage against solar elevation at 32 cities × 4 seasons); (2) the closed
+  form for the boundary latitude flips branches near the equinoxes and returns
+  latitudes outside ±90, which produced a self-intersecting polygon that never
+  rendered. The current code collects per-meridian crossings by scanning and
+  bisecting, and builds the terminator as a great circle split at the
+  antimeridian. Accuracy is verified, not assumed: on the curve the solar
+  elevation equals the threshold to 0.0000°.
 * **Aircraft watchlists live in `data/icarus/watchlist.json`**, separate from
   the vessel `data/watchlist.json`. Alerts from both domains share
   `data/alerts.jsonl`; the air UI restores only `aircraft_*` kinds.

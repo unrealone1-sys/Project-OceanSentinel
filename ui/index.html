@@ -111,6 +111,8 @@
       </div>
       <div class="field-group">
         <div class="group-title">MAP LAYERS</div>
+        <label class="check"><input type="checkbox" data-layer="night" checked /> Day / night + twilight bands</label>
+        <label class="check"><input type="checkbox" data-layer="meridians" checked /> UTC hour meridians</label>
         <label class="check"><input type="checkbox" data-layer="tracks" checked /> Vessel icons</label>
         <label class="check"><input type="checkbox" data-layer="labels" checked /> Vessel labels</label>
         <label class="check"><input type="checkbox" data-layer="trails" checked /> Track history trails</label>
@@ -179,6 +181,10 @@
   </div>
 
   <div id="legend">
+    <div><i style="background:#0e2148"></i> night (sun below horizon)</div>
+    <div><i style="background:#081226"></i> twilight · civil −6° / nautical −12° / astronomical −18°</div>
+    <div><i style="background:#facc15"></i> terminator · solar noon</div>
+    <div><i style="background:#94a3b8"></i> solar hour meridian (UTC±N, not political zones)</div>
     <div><i style="background:#22d3ee"></i> AIS</div>
     <div><i style="background:#fb923c"></i> Sonar/radar</div>
     <div><i style="background:#4ade80"></i> LiDAR</div>
@@ -201,6 +207,7 @@
 
 <script src="/vendor/maplibre-gl.js"></script>
 <script src="/basemaps.js"></script>
+<script src="/daylight.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>
