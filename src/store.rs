@@ -191,6 +191,7 @@ impl Store {
             }
         }
         self.mmsi_index.insert(mmsi, id.clone());
+        self.classify_identity(&id);
         id
     }
 
@@ -207,6 +208,7 @@ impl Store {
             .unwrap_or("unknown");
         self.tracks
             .insert(id.clone(), Track::new_sensor(id.clone(), c, classification));
+        self.classify_identity(&id);
         id
     }
 

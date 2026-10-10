@@ -370,6 +370,45 @@ impl Fusion {
                 }
             }
             st.push_trail(&id, c.lat, c.lon, c.ts);
+            // A sensor label can name a carrier too ("USS NIMITZ" off a radar
+            // tracker), so classification runs for every feed, not just AIS.
+            // Classify (the label may have just named it), then decide from the
+            // per-track flag rather than from classify's return value: creating
+            // the track already classified it, which would swallow the "newly"
+            // signal and with it the alert.
+            st.classify_identity(&id);
+            let newly_carrier = st
+                .tracks
+                .get_mut(&id)
+                .map(|t| {
+                    if t.carrier && !t.carrier_alerted {
+                        t.carrier_alerted = true;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            if newly_carrier {
+                let label = st
+                    .tracks
+                    .get(&id)
+                    .and_then(|t| t.name.clone())
+                    .unwrap_or_else(|| c.label.clone().unwrap_or_else(|| id.clone()));
+                pending.push(mk_alert(
+                    "carrier_contact",
+                    "high",
+                    format!(
+                        "AIRCRAFT CARRIER — {label} identified near {:.3}, {:.3} ({}). Carriers often stop transmitting AIS at sea.",
+                        c.lat,
+                        c.lon,
+                        c.source.as_str()
+                    ),
+                    Some(id.clone()),
+                    c.lat,
+                    c.lon,
+                ));
+            }
             debug!(
                 source = c.source.as_str(),
                 label = c.label.as_deref().unwrap_or("-"),
