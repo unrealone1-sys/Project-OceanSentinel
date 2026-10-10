@@ -55,7 +55,7 @@ Run with `--no-open` when testing so no browser window is spawned.
 | `src/main.rs` | CLI (clap), wiring, Edge/Chrome `--app` window launch |
 | `src/config.rs` | `config.toml` (+ `OS_PORT`/`OS_HOST`/`OS_SIM`/`GFW_API_TOKEN` env overrides) |
 | `src/model.rs` | `Contact`, `Track`, `Alert`, `Zone`, `FeedStatus`, `OwnShipFix`, ship-type classification (shared with Icarus) |
-| `src/adsb.rs` | Project Icarus feed client: ADS-B record parsing, viewport→query-circle planning, request budget, registry lookup |
+| `src/adsb.rs` | Project Icarus feed client: ADS-B record parsing, viewport→query-circle planning, request budget, airframe registry lookup, airline (callsign designator) and military-operator (address block) attribution |
 | `src/icarus.rs` | Air-domain store: `AircraftTrack`, poller, trails, air alerts, aircraft watchlist, position archive |
 | `src/geo.rs` | haversine, destination point, bearing, point-in-polygon |
 | `src/nmea.rs` | NMEA 0183 framing + checksum, own-ship nav (GGA/GLL/RMC/HDT/VTG), `TLL`/`TTM` parsers |
@@ -70,7 +70,7 @@ Run with `--no-open` when testing so no browser window is spawned.
 | `src/sources/aisstream.rs` | Global live AIS over WebSocket (AISStream.io), mapped onto `AisBody` |
 | `src/sources/nmea_tcp.rs`, `nmea_udp.rs` | Feed transports with reconnect/backoff and feed status |
 | `src/sources/simulator.rs` | Built-in traffic generator (emits real NMEA/JSON through the real ingest path) |
-| `ui/` | two MapLibre dark map UIs (`index.html`/`app.js` = ships, `icarus.html`/`icarus.js` = aircraft) sharing `style.css` and `basemaps.js`; vendored `ui/vendor/maplibre-gl.js`; all embedded into the exe |
+| `ui/` | two MapLibre dark map UIs (`index.html`/`app.js` = ships, `icarus.html`/`icarus.js` = aircraft) sharing `style.css`, `basemaps.js` (seven keyless basemaps) and `daylight.js` (solar terminator, twilight bands, UTC hour meridians); vendored `ui/vendor/maplibre-gl.js`; all embedded into the exe |
 
 Data flow (ships): feed → `Router` → `Event` (mpsc) → `Fusion` → `Store` →
 broadcast → WebSocket/`/api/state` → UI. Never bypass `Router` when adding a
@@ -116,6 +116,13 @@ delivery pipeline; the stores, channels, watchlists and UI pages are separate.
 * **`airplanes.live` serves the same v2 schema but returns HTTP 403** to
   unregistered clients ("contact us at contact@airplanes.live"). Do not switch
   the default to it.
+* **Both maps share one intro sequence — tune them together.** `runBoot()` is
+  the same code in `app.js` and `icarus.js` (same tick, easing, message dwell,
+  data-gated finish, same 12 s safety net for throttled background tabs), and
+  each page reports its own duration as `window.__bootMs`. Changing the pacing
+  in one file without the other makes the two maps feel like different products,
+  which is exactly what happened once: Project Icarus jumped straight to done on
+  the first state message and opened visibly faster than OceanSentinel.
 * **MapLibre 4 will not accept a `<canvas>` as an `addImage` source once the map
   is rendering** — it throws `mismatched image size. expected: 0 but got: N`
   because a canvas carries no pixel buffer. Pass `ImageData`
@@ -145,6 +152,14 @@ delivery pipeline; the stores, channels, watchlists and UI pages are separate.
   bisecting, and builds the terminator as a great circle split at the
   antimeridian. Accuracy is verified, not assumed: on the curve the solar
   elevation equals the threshold to 0.0000°.
+* **Naval and carrier identification is name/type based and deliberately
+  conservative.** `model.rs` matches carrier names exactly after stripping a
+  naval prefix and any parenthetical hull number (so "USS NIMITZ (CVN-68)" and
+  "HMS QUEEN ELIZABETH" match, while the liner "QUEEN ELIZABETH 2" does not),
+  and flags naval from AIS ship type 35 or a military name prefix. Flags are
+  sticky: a later bland type code cannot un-flag a carrier. The air map shows
+  these contacts by reading the maritime store (`Icarus::ships`), so the two
+  maps can never disagree about where a carrier is.
 * **Aircraft watchlists live in `data/icarus/watchlist.json`**, separate from
   the vessel `data/watchlist.json`. Alerts from both domains share
   `data/alerts.jsonl`; the air UI restores only `aircraft_*` kinds.
@@ -258,6 +273,23 @@ with an actionable message, nothing else breaks.
   eyeballing pixels; then rebuild release.
 * **API**: `curl /api/health`, `/api/state`, `POST /api/zones`,
   `/api/gfw/vessel` (error path without a token is itself worth checking).
+
+### Verifying the day/night overlay
+
+It is astronomy, so it can be checked exactly rather than eyeballed — worth
+doing after any change to `ui/daylight.js`:
+
+* On a band boundary the computed solar elevation must equal the band's
+  threshold. Evaluate `OSDaylight.solarElevation(OSDaylight.bandInterval(lon,
+  date, h0)[i], lon, sun.lat, sun.lon)` in the page console and compare with
+  `h0` (verified to 0.0000°).
+* `solarElevation` must be +90° at the sub-solar point and −90° at the
+  antipode.
+* Band coverage must match the elevation sign for a spread of cities, in all
+  four seasons. This is what caught the pole-anchored band bug.
+* A quick render check: with the overlay on, sample luminance either side of
+  the terminator on a pale basemap — the night side must be measurably darker,
+  in steps, not a single edge.
 
 ## Where to extend
 

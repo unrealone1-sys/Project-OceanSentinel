@@ -198,6 +198,7 @@ impl Fusion {
                     let (lat, lon) = (*lat, *lon);
                     let id = st.ensure_mmsi_track(mmsi, lat, lon, ts, self.cfg.gate_m);
                     let mut newly_corroborated = false;
+                    let mut newly_carrier = false;
                     if let Some(t) = st.tracks.get_mut(&id) {
                         t.lat = lat;
                         t.lon = lon;
@@ -226,6 +227,51 @@ impl Fusion {
                     if let Some(s) = self.statics.get(&mmsi).cloned() {
                         st.apply_static_body(&s);
                     }
+                    st.classify_identity(&id);
+                    // One alert per track, and only where a position exists to
+                    // report: a static-only message carries no coordinates.
+                    if let Some(t) = st.tracks.get_mut(&id) {
+                        if t.carrier && !t.carrier_alerted {
+                            t.carrier_alerted = true;
+                            newly_carrier = true;
+                        }
+                    }
+                    if newly_carrier
+                        && cooldown_ok(
+                            &mut self.cooldown,
+                            self.cfg.alert_cooldown_s,
+                            &format!("carrier:{id}"),
+                            ts,
+                        )
+                    {
+                        let (label, sog, cog) = st
+                            .tracks
+                            .get(&id)
+                            .map(|t| {
+                                (
+                                    t.name.clone().unwrap_or_else(|| format!("MMSI {mmsi}")),
+                                    t.sog,
+                                    t.cog,
+                                )
+                            })
+                            .unwrap_or((format!("MMSI {mmsi}"), None, None));
+                        let course = match (sog, cog) {
+                            (Some(s), Some(c)) => {
+                                format!(" making {s:.0} kn on {c:.0}°")
+                            }
+                            _ => String::new(),
+                        };
+                        pending.push(mk_alert(
+                            "carrier_contact",
+                            "high",
+                            format!(
+                                "AIRCRAFT CARRIER — {label} identified near {lat:.3}, {lon:.3}{course}. Carriers often stop transmitting AIS at sea."
+                            ),
+                            Some(id.clone()),
+                            lat,
+                            lon,
+                        ));
+                    }
                     if newly_corroborated
                         && cooldown_ok(
                             &mut self.cooldown,
@@ -252,6 +298,11 @@ impl Fusion {
                 _ => {
                     st.apply_static_body(&body);
                     self.statics.insert(mmsi, body.clone());
+                    // No position in this message: classify, and let the next
+                    // position report raise the alert.
+                    if let Some(id) = st.mmsi_index.get(&mmsi).cloned() {
+                        st.classify_identity(&id);
+                    }
                 }
             }
         }

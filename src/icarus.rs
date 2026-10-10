@@ -166,6 +166,9 @@ pub struct IcarusStore {
     pub queries: u64,
     pub last_fetch: Option<DateTime<Utc>>,
     pub last_fetch_count: usize,
+    /// Naval surface picture (carriers and warships) taken from the maritime
+    /// store, so the air map can show what aircraft operate around.
+    pub surface: Vec<Value>,
     /// Effective lost-contact threshold: the configured value, or longer when
     /// the request budget stretches the sweep beyond it.
     pub lost_after_s: f64,
@@ -197,6 +200,7 @@ impl IcarusStore {
             queries: 0,
             last_fetch: None,
             last_fetch_count: 0,
+            surface: Vec::new(),
             lost_after_s: cfg.lost_contact_s as f64,
             client_stats: adsb::ClientStats::default(),
             cooldowns: HashMap::new(),
@@ -651,6 +655,12 @@ impl IcarusStore {
             .values()
             .filter(|t| t.has_flag("watchlist"))
             .count();
+        let carriers = self
+            .surface
+            .iter()
+            .filter(|v| v.get("carrier").and_then(Value::as_bool).unwrap_or(false))
+            .count();
+        let naval = self.surface.len();
 
         // "throttled" is its own state: it is not an outage, it is the client
         // staying politely inside a small request budget.
@@ -685,6 +695,9 @@ impl IcarusStore {
             // the receiver queries the picture is built from, so the map can
             // show its own coverage instead of hiding the gaps
             "query_circles": self.circles,
+            // carriers and warships, with the positions the ocean map is
+            // tracking them at
+            "surface": self.surface,
             "alerts": alerts,
             "watchlist": self.watchlist,
             "feeds": [{
@@ -704,6 +717,8 @@ impl IcarusStore {
                 "emergency": emergency,
                 "lost": lost,
                 "watchlist": watched,
+                "carriers": carriers,
+                "naval": naval,
                 "alerts": self.total_alerts,
                 "queries": self.queries,
                 "updated": self.last_fetch_count,
@@ -756,6 +771,8 @@ struct Pending {
 pub struct Icarus {
     pub cfg: IcarusCfg,
     pub store: Arc<RwLock<IcarusStore>>,
+    /// The maritime store, read-only: the air map shows naval contacts from it.
+    pub ships: Arc<RwLock<crate::store::Store>>,
     pub client: Arc<AdsbClient>,
     bcast: broadcast::Sender<IcarusMsg>,
     notify: mpsc::UnboundedSender<Alert>,
@@ -770,6 +787,7 @@ impl Icarus {
     pub fn new(
         cfg: IcarusCfg,
         store: Arc<RwLock<IcarusStore>>,
+        ships: Arc<RwLock<crate::store::Store>>,
         client: Arc<AdsbClient>,
         bcast: broadcast::Sender<IcarusMsg>,
         notify: mpsc::UnboundedSender<Alert>,
@@ -792,6 +810,7 @@ impl Icarus {
         Icarus {
             cfg,
             store,
+            ships,
             client,
             bcast,
             notify,
@@ -967,8 +986,16 @@ impl Icarus {
                 }
             }
 
+            // Naval contact positions, straight from the maritime picture: the
+            // same store the ocean map uses, so the two maps can never disagree.
+            let surface = {
+                let ships = self.ships.read().await;
+                surface_contacts(&ships)
+            };
+
             let meta = self.meta.clone();
             let mut store = self.store.write().await;
+            store.surface = surface;
             store.mode = if plan.global {
                 "global".into()
             } else {
@@ -1018,6 +1045,42 @@ impl Icarus {
             let _ = self.bcast.send(IcarusMsg::State(snap));
         }
     }
+}
+
+/// Naval surface contacts for the air map: carriers first, then warships.
+/// Only contacts whose own AIS identity says naval are included — position and
+/// behaviour never promote a ship into this list.
+fn surface_contacts(ships: &crate::store::Store) -> Vec<Value> {
+    let now = Utc::now();
+    let mut out: Vec<Value> = ships
+        .tracks
+        .values()
+        .filter(|t| t.naval || t.carrier)
+        .map(|t| {
+            json!({
+                "id": t.id,
+                "name": t.name,
+                "mmsi": t.mmsi,
+                "lat": t.lat,
+                "lon": t.lon,
+                "sog": t.sog,
+                "cog": t.cog,
+                "classification": t.classification,
+                "naval": t.naval,
+                "carrier": t.carrier,
+                "age_s": (now - t.last_seen).num_seconds(),
+            })
+        })
+        .collect();
+    // carriers first, then the most recently heard
+    out.sort_by_key(|v| {
+        (
+            !v.get("carrier").and_then(Value::as_bool).unwrap_or(false),
+            -v.get("age_s").and_then(Value::as_i64).unwrap_or(0),
+        )
+    });
+    out.truncate(200);
+    out
 }
 
 /// The upstream query path for a circle. Two circles that round to the same

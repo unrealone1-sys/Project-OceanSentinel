@@ -236,7 +236,7 @@ map.on('error', (e) => {
   }
 });
 
-const SHAPES = ['fishing', 'cargo', 'passenger', 'other'];
+const SHAPES = ['fishing', 'cargo', 'passenger', 'other', 'carrier', 'naval'];
 
 /// Vessel silhouettes by class, tinted by track source, so a trawler and a
 /// tanker read differently at a glance (as on any serious MDA display).
@@ -265,6 +265,38 @@ function shipIcon(color, shape = 'other', size = 34) {
     ctx.quadraticCurveTo(s * 0.8, s - 5, s / 2 + r, s - 5);
     ctx.lineTo(s / 2 - r, s - 5);
     ctx.quadraticCurveTo(s * 0.2, s - 5, s * 0.2, s * 0.35);
+  } else if (shape === 'carrier') {
+    // flat flight deck with the island to starboard: unmistakable at a glance
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(2,6,12,0.9)';
+    ctx.moveTo(s * 0.5, 2.5);
+    ctx.lineTo(s * 0.72, s * 0.2);
+    ctx.lineTo(s * 0.72, s - 4);
+    ctx.lineTo(s * 0.28, s - 4);
+    ctx.lineTo(s * 0.28, s * 0.2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillRect(s * 0.6, s * 0.34, s * 0.09, s * 0.2); // island
+    ctx.strokeRect(s * 0.6, s * 0.34, s * 0.09, s * 0.2);
+    return ctx.getImageData(0, 0, s, s);
+  } else if (shape === 'naval') {
+    // sharp narrow hull, small superstructure
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(2,6,12,0.9)';
+    ctx.moveTo(s * 0.5, 2);
+    ctx.lineTo(s * 0.62, s * 0.42);
+    ctx.lineTo(s * 0.6, s - 3);
+    ctx.lineTo(s * 0.4, s - 3);
+    ctx.lineTo(s * 0.38, s * 0.42);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillRect(s * 0.45, s * 0.44, s * 0.1, s * 0.14);
+    ctx.strokeRect(s * 0.45, s * 0.44, s * 0.1, s * 0.14);
+    return ctx.getImageData(0, 0, s, s);
   } else {
     ctx.moveTo(s / 2, 2.5);
     ctx.lineTo(s * 0.84, s - 5);
@@ -414,6 +446,20 @@ function setupMapLayers() {
       'text-allow-overlap': true,
     },
     paint: { 'text-color': '#e6f7fd' },
+  });
+
+  map.addLayer({
+    id: 'naval-rings',
+    type: 'circle',
+    source: 'tracks',
+    filter: ['all', ['!', ['has', 'point_count']], ['==', ['get', 'carrier'], true]],
+    paint: {
+      'circle-radius': ['interpolate', ['linear'], ['zoom'], 3, 9, 8, 17, 12, 28],
+      'circle-color': 'rgba(0,0,0,0)',
+      'circle-stroke-color': '#fbbf24',
+      'circle-stroke-width': 2,
+      'circle-stroke-opacity': 0.9,
+    },
   });
 
   map.addLayer({
@@ -599,9 +645,14 @@ function labelOf(t) {
   return t.id;
 }
 
-/// Vessel class -> icon silhouette.
+/// Vessel class -> icon silhouette. Naval identity outranks the type code:
+/// a carrier must not be drawn as "other" because its AIS type was bland.
 function shapeOf(t) {
+  if (t.carrier) return 'carrier';
+  if (t.naval) return 'naval';
   const c = (t.classification || '').toLowerCase();
+  if (c === 'carrier') return 'carrier';
+  if (c === 'military') return 'naval';
   if (c === 'fishing' || c === 'sailing' || c === 'pleasure' || c === 'dredging') return 'fishing';
   if (c === 'cargo' || c === 'tanker' || c === 'towing' || c === 'highspeed') return 'cargo';
   if (c === 'passenger' || c === 'patrol' || c === 'sar' || c === 'medical' || c === 'military' || c === 'port' || c === 'pilot') {
@@ -620,7 +671,12 @@ function visible(t) {
       (s.includes('lidar') && f.lidar) ||
       (s.includes('radar') && f.sonar);
   if (!srcOk) return false;
-  if (state.classFilter && shapeOf(t) !== state.classFilter) return false;
+  if (state.classFilter) {
+    const shape = shapeOf(t);
+    const ok =
+      state.classFilter === 'naval' ? shape === 'naval' || shape === 'carrier' : shape === state.classFilter;
+    if (!ok) return false;
+  }
   if (state.inViewOnly && !map.getBounds().contains([t.lon, t.lat])) return false;
   return true;
 }
@@ -680,9 +736,11 @@ function tracksFC() {
         shape: shapeOf(t),
         heading: t.heading ?? t.cog ?? 0,
         dark: !!t.dark,
+        carrier: !!t.carrier,
+        naval: !!t.naval,
         cls: t.classification || '',
-        // dark contacts and alerts win label collisions
-        priority: t.dark ? 0 : 1,
+        // carriers, dark contacts and alerts win label collisions
+        priority: t.carrier ? -1 : t.dark ? 0 : 1,
       },
     });
   }
@@ -871,6 +929,7 @@ function applyLayerVisibility() {
   v('gfw-circles', state.layers.gfw);
   v('own-icon', state.layers.own);
   v('own-ring', state.layers.own);
+  v('naval-rings', state.layers.tracks);
   // day/night marking owns its own layers (daylight.js)
   if (window.OSDaylight) {
     OSDaylight.setVisible({ night: state.layers.night, meridians: state.layers.meridians });
@@ -950,8 +1009,22 @@ function applyState(msg) {
 
   if (state.firstState && state.app.aoi && !state.userMoved) {
     state.firstState = false;
-    const a = state.app.aoi;
-    map.jumpTo({ center: [a.lon, a.lat], zoom: a.zoom || 9 });
+    // ?select=<track id> lets the air map hand a naval contact over to this one
+    let wanted = null;
+    try {
+      wanted = new URLSearchParams(location.search).get('select');
+    } catch (e) {
+      /* ignore */
+    }
+    if (wanted && state.tracks.has(wanted)) {
+      const t = state.tracks.get(wanted);
+      map.jumpTo({ center: [t.lon, t.lat], zoom: Math.max(8, state.app.aoi.zoom || 9) });
+      selectTrack(wanted);
+      banner(`Showing ${t.name || t.id} handed over from the air map`, '');
+    } else {
+      const a = state.app.aoi;
+      map.jumpTo({ center: [a.lon, a.lat], zoom: a.zoom || 9 });
+    }
   }
 
   pushData();
@@ -1039,7 +1112,11 @@ function renderTrackList(force) {
   } else if (state.sortBy === 'speed') {
     rows.sort((a, b) => (b.sog || 0) - (a.sog || 0));
   } else {
-    rows.sort((a, b) => (b.dark ? 1 : 0) - (a.dark ? 1 : 0) || String(b.last_seen).localeCompare(String(a.last_seen)));
+    // carriers, then warships, then dark contacts, then most recent
+    const rank = (t) => (t.carrier ? -2 : t.naval ? -1 : t.dark ? 1 : 0);
+    rows.sort(
+      (a, b) => rank(a) - rank(b) || String(b.last_seen).localeCompare(String(a.last_seen))
+    );
   }
   const total = rows.length;
   const CAP = 400;
@@ -1051,6 +1128,8 @@ function renderTrackList(force) {
       const s = styleOf(t);
       const sel = state.selected === t.id ? ' sel' : '';
       const bits = [];
+      if (t.carrier) bits.push('★ CARRIER');
+      else if (t.naval) bits.push('NAVAL');
       if (t.dark) bits.push('DARK');
       const motion = [];
       if (t.sog !== null && t.sog !== undefined) motion.push(num(t.sog, 1) + 'kn');
@@ -1435,6 +1514,7 @@ function renderDrawer() {
     <div class="vsub">${esc(t.id)}</div>
     <div class="badges">
       ${badges}
+      ${t.carrier ? '<span class="vbadge warn">AIRCRAFT CARRIER</span>' : t.naval ? '<span class="vbadge warn">NAVAL / WARSHIP</span>' : ''}
       ${t.dark ? '<span class="vbadge dark">DARK CONTACT — NO AIS</span>' : ''}
       ${t.corroborated ? '<span class="vbadge ok">SENSOR-CORROBORATED</span>' : ''}
     </div>
@@ -1448,6 +1528,11 @@ function renderDrawer() {
           : ''
       }
       ${gfwVesselId ? `<a class="btn ghost" style="text-decoration:none" target="_blank" rel="noopener" href="https://globalfishingwatch.org/map/?vesselId=${encodeURIComponent(gfwVesselId)}">GFW MAP ↗</a>` : ''}
+      ${
+        t.naval || t.carrier
+          ? `<a class="btn ghost" style="text-decoration:none" href="/icarus?surface=${encodeURIComponent(t.id)}" title="Show the air picture, with this contact on it">AEROSPACE MAP ↗</a>`
+          : ''
+      }
     </div>
     ${gfwHtml}
   `;

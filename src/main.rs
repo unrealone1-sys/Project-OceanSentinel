@@ -232,6 +232,7 @@ async fn main() -> Result<()> {
             icarus::Icarus::new(
                 cfg.icarus.clone(),
                 icarus_store.clone(),
+                store.clone(),
                 icarus_client.clone(),
                 icarus_tx.clone(),
                 notify_tx.clone(),

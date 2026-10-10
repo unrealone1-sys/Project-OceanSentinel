@@ -310,6 +310,28 @@ note = "government flight"
 The air map has its own watchlist (`data/icarus/watchlist.json`) and can archive
 positions to `data/icarus/history/<day>.jsonl` with `record = true`.
 
+## Military and carrier contacts
+
+Both maps surface the contacts that normally hide in the noise:
+
+* **Military aircraft** — the global `/v2/mil` sweep gives every military and
+  government aircraft the network can hear, worldwide, in one request. The
+  transponder block adds attribution where it is unambiguous (US `AE0000–AFFFFF`,
+  UK `43C000–43CFFF`); everything else is left unlabelled rather than guessed.
+  Operator, model and year come from the airframe record on demand.
+* **Aircraft carriers and warships** — flagged from AIS ship type 35 and from
+  naval name prefixes, with carriers matched on exact names (`USS NIMITZ (CVN-68)`
+  matches; the liner *Queen Elizabeth 2* does not). First identification raises a
+  high-severity alert, carriers sort to the top of the track list and carry their
+  own silhouette and ring.
+* **Cross-domain view** — the air map draws the naval surface picture from the
+  same store the sea map uses, with a ring marking each carrier's approximate
+  50 nm air-control area, and the two maps link to each other on the same
+  contact.
+
+A carrier appears only while it transmits AIS; carriers routinely go dark at sea,
+so an empty list is not evidence of absence.
+
 ## Day / night and time zones
 
 Both maps carry a solar day/night overlay, drawn like an eclipse chart: the

@@ -210,6 +210,30 @@ impl Store {
         id
     }
 
+    /// Re-derive the naval/carrier flags and classification from whatever
+    /// identity the track now holds. Returns true when this is the first time
+    /// the track is known to be a carrier, so the caller can alert on it.
+    pub fn classify_identity(&mut self, id: &str) -> bool {
+        let Some(t) = self.tracks.get_mut(id) else {
+            return false;
+        };
+        let name_hit = t.name.as_deref().map(is_carrier_name).unwrap_or(false);
+        let naval_id = t.ship_type == Some(35)
+            || t.name.as_deref().map(is_naval_name).unwrap_or(false)
+            || name_hit;
+        let was_carrier = t.carrier;
+        // flags are sticky: a carrier or warship does not become a cargo ship
+        // because a later message carried a bland type code
+        t.carrier = t.carrier || name_hit;
+        t.naval = t.naval || naval_id || t.carrier;
+        if t.carrier {
+            t.classification = "carrier".to_string();
+        } else if t.naval && t.classification == "unknown" {
+            t.classification = "military".to_string();
+        }
+        t.carrier && !was_carrier
+    }
+
     pub fn apply_static_body(&mut self, body: &AisBody) {
         let mmsi = match body.mmsi() {
             Some(m) => m,
@@ -299,6 +323,14 @@ impl Store {
                 }
                 _ => {}
             }
+            // identity may have just arrived (or changed): refresh the flags
+            let _ = self.classify_identity(&id);
+            if let Some(t) = self.tracks.get_mut(&id) {
+                let want = crate::model::classify_with_name(t.name.as_deref(), t.ship_type);
+                if !t.carrier && !t.naval {
+                    t.classification = want.to_string();
+                }
+            }
         }
     }
 
@@ -330,13 +362,20 @@ impl Store {
             })
             .collect();
         tracks.sort_by(|a, b| {
+            let ca = a.get("carrier").and_then(|v| v.as_bool()).unwrap_or(false);
+            let cb = b.get("carrier").and_then(|v| v.as_bool()).unwrap_or(false);
+            let na = a.get("naval").and_then(|v| v.as_bool()).unwrap_or(false);
+            let nb = b.get("naval").and_then(|v| v.as_bool()).unwrap_or(false);
             let da = a.get("dark").and_then(|v| v.as_bool()).unwrap_or(false);
             let db = b.get("dark").and_then(|v| v.as_bool()).unwrap_or(false);
-            db.cmp(&da).then_with(|| {
-                b.get("last_seen")
-                    .and_then(|v| v.as_str())
-                    .cmp(&a.get("last_seen").and_then(|v| v.as_str()))
-            })
+            cb.cmp(&ca)
+                .then_with(|| nb.cmp(&na))
+                .then_with(|| db.cmp(&da))
+                .then_with(|| {
+                    b.get("last_seen")
+                        .and_then(|v| v.as_str())
+                        .cmp(&a.get("last_seen").and_then(|v| v.as_str()))
+                })
         });
 
         let mut alerts: Vec<Value> = self
@@ -359,6 +398,8 @@ impl Store {
             .filter(|t| !t.sensor_sources().is_empty())
             .count();
         let corroborated = self.tracks.values().filter(|t| t.corroborated).count();
+        let naval = self.tracks.values().filter(|t| t.naval).count();
+        let carriers = self.tracks.values().filter(|t| t.carrier).count();
 
         json!({
             "type": "state",
@@ -379,6 +420,8 @@ impl Store {
                 "alerts": self.total_alerts,
                 "dark_alerts": self.dark_alerts,
                 "watchlist": self.watchlist.len(),
+                "naval": naval,
+                "carriers": carriers,
                 "uptime_s": (now - self.started).num_seconds(),
             },
             "app": {

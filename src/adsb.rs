@@ -73,6 +73,18 @@ pub struct Aircraft {
     pub emergency: String,
     /// ADS-B emitter category (A3 = large airplane, C2 = light rotorcraft …).
     pub category: Option<String>,
+    /// Airline the callsign belongs to, from its 3-letter ICAO designator
+    /// ("BAW123" -> British Airways). None when the callsign is a registration
+    /// or a designator the table does not know — an unknown airline is
+    /// reported as unknown rather than guessed at.
+    pub airline: Option<String>,
+    /// Military operator, derived from the transponder address block. Only
+    /// blocks that are unambiguously military are mapped; everything else
+    /// stays None so no civil aircraft is labelled as military.
+    pub operator: Option<String>,
+    /// Autopilot / navigation modes the aircraft is broadcasting (e.g.
+    /// "autopilot,althold"), when the feed includes them.
+    pub nav_modes: Option<String>,
     pub military: bool,
     pub interesting: bool,
     /// Privacy ICAO address / Limiting Aircraft Data Displayed.
@@ -117,6 +129,181 @@ impl Aircraft {
     pub fn is_emergency(&self) -> bool {
         !self.emergency.is_empty()
     }
+}
+
+/// Airlines by ICAO 3-letter designator, as broadcast in the callsign. The
+/// list covers the carriers that make up the overwhelming majority of what a
+/// receiver hears; anything missing shows no airline rather than a wrong one.
+/// (Callsigns that are tail numbers — "N123AB", "G-EZUC" — never match, because
+/// a designator is three letters.)
+pub fn airline_from_callsign(callsign: &str) -> Option<&'static str> {
+    let cs = callsign.trim().to_ascii_uppercase();
+    let prefix: String = cs.chars().take(3).collect();
+    if prefix.len() < 3 || !prefix.chars().all(|c| c.is_ascii_alphabetic()) {
+        return None;
+    }
+    AIRLINES
+        .iter()
+        .find(|(code, _)| *code == prefix)
+        .map(|(_, name)| *name)
+}
+
+/// A partial but strictly accurate map: an entry here means the designator is
+/// exclusively that operator's.
+const AIRLINES: &[(&str, &str)] = &[
+    ("BAW", "British Airways"),
+    ("SHT", "British Airways (shuttle)"),
+    ("EZY", "easyJet"),
+    ("EJU", "easyJet Europe"),
+    ("EXS", "Jet2.com"),
+    ("LOG", "Loganair"),
+    ("TOM", "TUI Airways"),
+    ("VIR", "Virgin Atlantic"),
+    ("RYR", "Ryanair"),
+    ("RUK", "Ryanair UK"),
+    ("WMT", "Malta Air"),
+    ("DLH", "Lufthansa"),
+    ("GEC", "Lufthansa Cargo"),
+    ("CLH", "Lufthansa CityLine"),
+    ("EWG", "Eurowings"),
+    ("SWR", "Swiss International"),
+    ("EDW", "Edelweiss Air"),
+    ("AUA", "Austrian Airlines"),
+    ("AFR", "Air France"),
+    ("HOP", "HOP!"),
+    ("TVF", "Transavia France"),
+    ("KLM", "KLM"),
+    ("KLC", "KLM Cityhopper"),
+    ("TRA", "Transavia"),
+    ("TFL", "TUI fly Netherlands"),
+    ("JAF", "TUI fly Belgium"),
+    ("IBE", "Iberia"),
+    ("IBK", "Iberia Express"),
+    ("ANE", "Air Nostrum"),
+    ("VLG", "Vueling"),
+    ("AEA", "Air Europa"),
+    ("EIN", "Aer Lingus"),
+    ("TAP", "TAP Air Portugal"),
+    ("PGA", "TAP Express"),
+    ("LOT", "LOT Polish Airlines"),
+    ("WZZ", "Wizz Air"),
+    ("THY", "Turkish Airlines"),
+    ("PGT", "Pegasus Airlines"),
+    ("SXS", "SunExpress"),
+    ("AEE", "Aegean Airlines"),
+    ("OAL", "Olympic Air"),
+    ("FIN", "Finnair"),
+    ("NAX", "Norwegian"),
+    ("SAS", "SAS"),
+    ("CSA", "Czech Airlines"),
+    ("TVS", "Smartwings"),
+    ("ROT", "Tarom"),
+    ("LZB", "Bulgaria Air"),
+    ("ASL", "Air Serbia"),
+    ("CTN", "Croatia Airlines"),
+    ("AAL", "American Airlines"),
+    ("DAL", "Delta Air Lines"),
+    ("UAL", "United Airlines"),
+    ("SWA", "Southwest Airlines"),
+    ("JBU", "JetBlue"),
+    ("NKS", "Spirit Airlines"),
+    ("ASA", "Alaska Airlines"),
+    ("HAL", "Hawaiian Airlines"),
+    ("SKW", "SkyWest"),
+    ("EDV", "Endeavor Air"),
+    ("RPA", "Republic Airways"),
+    ("FFT", "Frontier Airlines"),
+    ("AAY", "Allegiant Air"),
+    ("ACA", "Air Canada"),
+    ("WJA", "WestJet"),
+    ("JZA", "Jazz Aviation"),
+    ("AMX", "Aeroméxico"),
+    ("VOI", "Volaris"),
+    ("VIV", "Viva Aerobus"),
+    ("CMP", "Copa Airlines"),
+    ("LAN", "LATAM Airlines"),
+    ("LTM", "LATAM Airlines"),
+    ("TAM", "LATAM Brasil"),
+    ("GLO", "GOL"),
+    ("AZU", "Azul"),
+    ("ARG", "Aerolíneas Argentinas"),
+    ("AVA", "Avianca"),
+    ("CPA", "Cathay Pacific"),
+    ("HDA", "Hong Kong Airlines"),
+    ("CRK", "Hong Kong Express"),
+    ("SIA", "Singapore Airlines"),
+    ("SLK", "SilkAir"),
+    ("ANA", "All Nippon Airways"),
+    ("JAL", "Japan Airlines"),
+    ("KAL", "Korean Air"),
+    ("AAR", "Asiana Airlines"),
+    ("CCA", "Air China"),
+    ("CES", "China Eastern"),
+    ("CSN", "China Southern"),
+    ("CHH", "Hainan Airlines"),
+    ("CSZ", "Shenzhen Airlines"),
+    ("EVA", "EVA Air"),
+    ("CAL", "China Airlines"),
+    ("THA", "Thai Airways"),
+    ("AIQ", "Thai AirAsia"),
+    ("MAS", "Malaysia Airlines"),
+    ("AXM", "AirAsia"),
+    ("XAX", "AirAsia X"),
+    ("GIA", "Garuda Indonesia"),
+    ("LNI", "Lion Air"),
+    ("PAL", "Philippine Airlines"),
+    ("CEB", "Cebu Pacific"),
+    ("VJC", "VietJet Air"),
+    ("HVN", "Vietnam Airlines"),
+    ("AIC", "Air India"),
+    ("IGO", "IndiGo"),
+    ("SEJ", "SpiceJet"),
+    ("AKJ", "Akasa Air"),
+    ("AXB", "Air India Express"),
+    ("QTR", "Qatar Airways"),
+    ("UAE", "Emirates"),
+    ("ETD", "Etihad Airways"),
+    ("FDB", "flydubai"),
+    ("ABY", "Air Arabia"),
+    ("JZR", "Jazeera Airways"),
+    ("SVA", "Saudia"),
+    ("KAC", "Kuwait Airways"),
+    ("GFA", "Gulf Air"),
+    ("OMA", "Oman Air"),
+    ("RJA", "Royal Jordanian"),
+    ("MEA", "Middle East Airlines"),
+    ("ELY", "El Al"),
+    ("ETH", "Ethiopian Airlines"),
+    ("KQA", "Kenya Airways"),
+    ("RAM", "Royal Air Maroc"),
+    ("DAH", "Air Algérie"),
+    ("MSR", "EgyptAir"),
+    ("SAA", "South African Airways"),
+    ("QFA", "Qantas"),
+    ("JST", "Jetstar"),
+    ("VOZ", "Virgin Australia"),
+    ("ANZ", "Air New Zealand"),
+    ("RXA", "Rex"),
+    ("FJI", "Fiji Airways"),
+];
+
+/// Military transponder blocks. Kept deliberately short: only allocations that
+/// are unambiguously military, so no civil aircraft can be mislabelled.
+pub fn military_operator(hex: &str) -> Option<&'static str> {
+    let h = hex.trim().to_ascii_lowercase();
+    if h.len() != 6 || !h.chars().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+    let v = u32::from_str_radix(&h, 16).ok()?;
+    // United States armed forces (AE0000-AFFFFF, inside the US allocation)
+    if (0xAE0000..=0xAFFFFF).contains(&v) {
+        return Some("United States military");
+    }
+    // United Kingdom military (43C000-43CFFF, inside the UK allocation)
+    if (0x43C000..=0x43CFFF).contains(&v) {
+        return Some("United Kingdom military");
+    }
+    None
 }
 
 /// Readable name for an emergency token (used in alert text and the drawer).
@@ -691,8 +878,15 @@ pub fn from_adsbx(v: &Value) -> Option<Aircraft> {
             .and_then(country_from_registration)
             .map(str::to_string)
     });
+    let callsign = clean_callsign(as_text(v, "flight"));
     Some(Aircraft {
-        callsign: clean_callsign(as_text(v, "flight")),
+        airline: callsign
+            .as_deref()
+            .and_then(airline_from_callsign)
+            .map(str::to_string),
+        operator: military_operator(&hex).map(str::to_string),
+        nav_modes: as_text(v, "nav_modes"),
+        callsign,
         registration,
         type_code: as_text(v, "t"),
         lat,
@@ -774,8 +968,11 @@ pub fn from_opensky(row: &Value) -> Option<Aircraft> {
             .map(|s| s.to_string()),
     );
     Some(Aircraft {
-        hex,
+        hex: hex.clone(),
         callsign,
+        airline: None,
+        operator: military_operator(&hex).map(str::to_string),
+        nav_modes: None,
         registration: None,
         type_code: None,
         lat,
@@ -1138,6 +1335,49 @@ mod tests {
         let a = from_adsbx(&v).unwrap();
         assert!(a.is_emergency());
         assert_eq!(a.emergency, "general");
+    }
+
+    #[test]
+    fn airline_comes_from_the_callsign_designator_only() {
+        assert_eq!(airline_from_callsign("BAW123"), Some("British Airways"));
+        assert_eq!(airline_from_callsign("ezy21um"), Some("easyJet"));
+        assert_eq!(airline_from_callsign("RYR 88"), Some("Ryanair"));
+        assert_eq!(
+            airline_from_callsign("SHT5R"),
+            Some("British Airways (shuttle)")
+        );
+        // a tail number is not an airline, and neither is an unknown code
+        assert_eq!(airline_from_callsign("N123AB"), None);
+        assert_eq!(airline_from_callsign("G-EZUC"), None);
+        assert_eq!(airline_from_callsign("ZZZ123"), None);
+        assert_eq!(airline_from_callsign(""), None);
+    }
+
+    #[test]
+    fn military_operator_only_maps_unambiguous_blocks() {
+        assert_eq!(military_operator("ae5667"), Some("United States military"));
+        assert_eq!(military_operator("AE1234"), Some("United States military"));
+        assert_eq!(military_operator("43C123"), Some("United Kingdom military"));
+        // a civil US address, a civil UK address and junk must stay unlabelled
+        assert_eq!(military_operator("a12345"), None);
+        assert_eq!(military_operator("40643d"), None);
+        assert_eq!(military_operator("zz"), None);
+    }
+
+    #[test]
+    fn airline_and_operator_reach_the_normalized_record() {
+        let mut v = sample();
+        v["flight"] = json!("BAW123");
+        v["hex"] = json!("43c123");
+        let a = from_adsbx(&v).unwrap();
+        assert_eq!(a.airline.as_deref(), Some("British Airways"));
+        assert_eq!(a.operator.as_deref(), Some("United Kingdom military"));
+        // the mil feed's extra field survives too
+        v["nav_modes"] = json!("autopilot,althold");
+        assert_eq!(
+            from_adsbx(&v).unwrap().nav_modes.as_deref(),
+            Some("autopilot,althold")
+        );
     }
 
     #[test]

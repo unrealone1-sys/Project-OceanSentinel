@@ -297,7 +297,29 @@ A second UI, not a mode of the first: same chrome, air-domain payload.
 * **Altitudes are shown as flight levels** (FL297) alongside feet, because that
   is how the airspace is actually worked.
 
-### 7.2 Day / night and time zones (both maps)
+### 7.2 Military, carriers and cross-domain contacts
+
+**Aircraft.** Military aircraft are identified from the feed itself: `dbFlags`
+in the military sweep, which is the only global query available for free. The
+transponder address block adds attribution where it is unambiguous (US
+`AE0000–AFFFFF`, UK `43C000–43CFFF`) and stays silent everywhere else, so no
+civil aircraft is ever labelled military. The drawer pulls the network's
+airframe record (owner/operator, model, year) on demand.
+
+**Aircraft carriers and warships.** The maritime side flags a vessel as naval
+from AIS ship type 35 (military operations) or a military name prefix, and as a
+carrier from an exact name match (any prefix or hull number stripped, so the
+liner *Queen Elizabeth 2* is not mistaken for *HMS Queen Elizabeth*). First
+identification raises a high-severity alert — a carrier is exactly the contact
+that should not be buried among thousands of fishing boats — and carriers sort
+to the top of the track list, carry their own silhouette and a gold ring.
+
+**Cross-domain.** The air map draws the naval surface picture from the *same*
+store the sea map uses, so a carrier shows in both places with one position,
+each carrier ringed by its approximate 50 nm air-control area. The two maps link
+to each other on the same contact (`/?select=<id>` and `/icarus?surface=<id>`).
+
+### 7.3 Day / night and time zones (both maps)
 
 `ui/daylight.js` draws the solar terminator the way a solar-eclipse chart does —
 a shaded night side with soft twilight bands — plus the sun's own position and

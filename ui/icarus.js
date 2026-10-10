@@ -49,7 +49,9 @@ const state = {
   stats: {},
   app: {},
   circles: [],
+  surface: [],
   selected: null,
+  selectedSurface: null,
   search: '',
   listFilter: 'all',
   sortBy: 'priority',
@@ -61,6 +63,7 @@ const state = {
     trails: true,
     rings: true,
     circles: true,
+    surface: true,
     night: true,
     meridians: true,
   },
@@ -310,6 +313,31 @@ function planeIcon(color, shape, size = 36) {
   return c;
 }
 
+/// Small hull glyph for the naval surface picture, drawn pointing up so the
+/// layer can rotate it by course.
+function shipGlyph(color, size = 30) {
+  const c = document.createElement('canvas');
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext('2d');
+  const s = size;
+  ctx.beginPath();
+  ctx.moveTo(s * 0.5, 2);
+  ctx.lineTo(s * 0.72, s * 0.3);
+  ctx.lineTo(s * 0.68, s - 3);
+  ctx.lineTo(s * 0.32, s - 3);
+  ctx.lineTo(s * 0.28, s * 0.3);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.lineWidth = 1.4;
+  ctx.strokeStyle = 'rgba(3,7,12,.9)';
+  ctx.stroke();
+  ctx.fillRect(s * 0.42, s * 0.44, s * 0.16, s * 0.18);
+  ctx.strokeRect(s * 0.42, s * 0.44, s * 0.16, s * 0.18);
+  return c;
+}
+
 function iconExpr() {
   const expr = ['match', ['get', 'shape']];
   for (const shape of SHAPES) {
@@ -371,9 +399,11 @@ function setupAirLayers() {
     }
   }
 
-  for (const id of ['graticule', 'circles', 'trails', 'watch-air']) {
+  for (const id of ['graticule', 'circles', 'trails', 'surface']) {
     map.addSource(id, { type: 'geojson', data: EMPTY_FC });
   }
+  map.addImage('surface-carrier', iconData(shipGlyph('#fbbf24')), { pixelRatio: 2 });
+  map.addImage('surface-naval', iconData(shipGlyph('#93c5fd')), { pixelRatio: 2 });
   // Clustered so a country-sized view does not paint thousands of icons; the
   // aircraft move fast, so the cluster radius is smaller than the ship map's.
   map.addSource('aircraft', {
@@ -412,6 +442,27 @@ function setupAirLayers() {
       'line-color': 'rgba(245,158,11,.45)',
       'line-width': 1,
       'line-dasharray': [3, 4],
+    },
+  });
+
+  // Naval surface picture: the carriers and warships the maritime map is
+  // tracking, with a ring showing roughly where their air operations happen.
+  map.addLayer({
+    id: 'surface-ops',
+    type: 'fill',
+    source: 'surface',
+    filter: ['==', ['geometry-type'], 'Polygon'],
+    paint: { 'fill-color': '#fbbf24', 'fill-opacity': 0.06 },
+  });
+  map.addLayer({
+    id: 'surface-ops-line',
+    type: 'line',
+    source: 'surface',
+    filter: ['==', ['geometry-type'], 'Polygon'],
+    paint: {
+      'line-color': 'rgba(251,191,36,.5)',
+      'line-width': 1,
+      'line-dasharray': [3, 3],
     },
   });
 
@@ -471,6 +522,41 @@ function setupAirLayers() {
         ['in', 'lost', ['get', 'flags']], RING.lost,
         'rgba(0,0,0,0)',
       ],
+    },
+  });
+
+  map.addLayer({
+    id: 'surface-icons',
+    type: 'symbol',
+    source: 'surface',
+    filter: ['==', ['geometry-type'], 'Point'],
+    layout: {
+      'icon-image': ['case', ['get', 'carrier'], 'surface-carrier', 'surface-naval'],
+      'icon-size': ['interpolate', ['linear'], ['zoom'], 2, 0.7, 8, 1.0, 12, 1.3],
+      'icon-rotate': ['coalesce', ['get', 'cog'], 0],
+      'icon-rotation-alignment': 'map',
+      'icon-allow-overlap': true,
+      'icon-ignore-placement': true,
+    },
+  });
+  map.addLayer({
+    id: 'surface-labels',
+    type: 'symbol',
+    source: 'surface',
+    filter: ['==', ['geometry-type'], 'Point'],
+    minzoom: 5,
+    layout: {
+      'text-font': ['Open Sans Regular'],
+      'text-field': ['get', 'label'],
+      'text-size': 10,
+      'text-offset': [0, 1.6],
+      'text-anchor': 'top',
+      'text-optional': true,
+    },
+    paint: {
+      'text-color': ['case', ['get', 'carrier'], '#fde68a', '#cbd5e1'],
+      'text-halo-color': '#03060b',
+      'text-halo-width': 1.6,
     },
   });
 
@@ -576,6 +662,12 @@ map.on('click', 'clusters', (e) => {
     .getClusterExpansionZoom(f.properties.cluster_id)
     .then((zoom) => map.easeTo({ center: f.geometry.coordinates, zoom: zoom + 0.2 }));
 });
+map.on('click', 'surface-icons', (e) => {
+  const f = e.features && e.features[0] && e.features[0].properties;
+  if (f && f.id) selectSurface(f.id);
+});
+map.on('mouseenter', 'surface-icons', () => (map.getCanvas().style.cursor = 'pointer'));
+map.on('mouseleave', 'surface-icons', () => (map.getCanvas().style.cursor = ''));
 map.on('mouseenter', 'ac-icons', () => (map.getCanvas().style.cursor = 'pointer'));
 map.on('mouseleave', 'ac-icons', () => (map.getCanvas().style.cursor = ''));
 map.on('mouseenter', 'clusters', () => (map.getCanvas().style.cursor = 'pointer'));
@@ -634,7 +726,7 @@ function visible(a) {
 
 function matchSearch(a) {
   const q = state.search.toLowerCase();
-  return [a.callsign, a.registration, a.hex, a.type_code, a.country]
+  return [a.callsign, a.registration, a.hex, a.type_code, a.country, a.airline, a.operator]
     .filter(Boolean)
     .some((v) => String(v).toLowerCase().includes(q));
 }
@@ -729,6 +821,35 @@ function circlesFC() {
   return { type: 'FeatureCollection', features: feats };
 }
 
+/// Naval contacts (points) plus a ring for each carrier, which is the inner
+/// air-control area an air wing works inside — an approximation, labelled as
+/// such in the legend.
+function surfaceFC() {
+  const feats = [];
+  for (const c of state.surface || []) {
+    feats.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [c.lon, c.lat] },
+      properties: {
+        id: c.id,
+        label: (c.carrier ? '★ ' : '') + (c.name || (c.mmsi ? 'MMSI ' + c.mmsi : c.id)),
+        carrier: !!c.carrier,
+        naval: !!c.naval,
+        cog: c.cog ?? 0,
+        stale: (c.age_s || 0) > 1800,
+      },
+    });
+    if (c.carrier) {
+      const pts = [];
+      for (let i = 0; i <= 72; i++) {
+        pts.push(destination(c.lat, c.lon, (i * 360) / 72, 50 * 1852));
+      }
+      feats.push({ type: 'Feature', geometry: { type: 'Polygon', coordinates: [pts] }, properties: {} });
+    }
+  }
+  return { type: 'FeatureCollection', features: feats };
+}
+
 function applyLayerVisibility() {
   const v = (id, on) => {
     if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', on ? 'visible' : 'none');
@@ -740,6 +861,10 @@ function applyLayerVisibility() {
   v('ac-rings', state.layers.rings);
   v('circles-fill', state.layers.circles);
   v('circles-line', state.layers.circles);
+  v('surface-ops', state.layers.surface);
+  v('surface-ops-line', state.layers.surface);
+  v('surface-icons', state.layers.surface);
+  v('surface-labels', state.layers.surface);
   // day/night marking owns its own layers (daylight.js)
   if (window.OSDaylight) {
     OSDaylight.setVisible({ night: state.layers.night, meridians: state.layers.meridians });
@@ -754,6 +879,7 @@ function pushData() {
   set('aircraft', aircraftFC());
   set('trails', trailsFC());
   set('circles', circlesFC());
+  set('surface', surfaceFC());
 }
 
 /// Cheap 1 Hz refresh of positions only (trails change slowly).
@@ -837,11 +963,27 @@ function applyState(msg) {
   state.stats = msg.stats || {};
   state.app = msg.app || {};
   state.circles = (msg.app && msg.app.query_circles) || msg.query_circles || [];
+  state.surface = msg.surface || [];
   state.hidden = msg.hidden_aircraft || 0;
 
   if (state.firstState && state.app.home && !state.userMoved) {
     state.firstState = false;
-    map.jumpTo({ center: [state.app.home.lon, state.app.home.lat], zoom: state.app.home.zoom || 8 });
+    let wanted = null;
+    try {
+      wanted = new URLSearchParams(location.search).get('surface');
+    } catch (e) {
+      /* ignore */
+    }
+    const hit = wanted && (state.surface || []).find((c) => c.id === wanted);
+    if (hit) {
+      map.jumpTo({ center: [hit.lon, hit.lat], zoom: 7 });
+      selectSurface(hit.id);
+    } else {
+      map.jumpTo({
+        center: [state.app.home.lon, state.app.home.lat],
+        zoom: state.app.home.zoom || 8,
+      });
+    }
   }
 
   pushData();
@@ -975,7 +1117,7 @@ function renderList(force) {
     if (hasFlag(a, 'watchlist')) flags.push('<em class="tag watchlist">WATCH</em>');
     if (hasFlag(a, 'military')) flags.push('<em class="tag military">MIL</em>');
     if (hasFlag(a, 'lost')) flags.push('<em class="tag lost">LOST</em>');
-    const sub = [a.type_code, a.registration, a.country, a.source]
+    const sub = [a.airline, a.operator, a.type_code, a.registration, a.country]
       .filter(Boolean)
       .slice(0, 3)
       .map(esc)
@@ -1068,6 +1210,7 @@ function renderStats() {
     `<span class="${s.emergency ? 'bad' : ''}"><b>${s.emergency || 0}</b> emergency</span>`,
     `<span><b>${s.lost || 0}</b> lost contact</span>`,
     `<span><b>${s.watchlist || 0}</b> watched</span>`,
+    `<span><b>${s.carriers || 0}</b> carriers</span>`,
     `<span><b>${s.alerts || 0}</b> alerts</span>`,
   ].join('');
 }
@@ -1128,6 +1271,8 @@ function renderDrawer() {
     ['ICAO hex', (a.hex || '').toUpperCase()],
     ['registration', a.registration || '—'],
     ['type', a.type_code || '—'],
+    ['operator / airline', a.airline ? `${esc(a.airline)}${a.operator ? ' · ' + esc(a.operator) : ''}` : a.operator ? esc(a.operator) : '—'],
+    ['nav modes', a.nav_modes ? esc(a.nav_modes) : '—'],
     ['emitter category', a.category || '—'],
     ['country', a.country || '—'],
     ['altitude', `${alt}${a.alt_geom_ft != null && !a.on_ground ? ` (geom ${nf(a.alt_geom_ft)} ft)` : ''}`],
@@ -1232,6 +1377,42 @@ function parseWatchInput(v) {
     return { registration: s.toUpperCase() };
   }
   return { callsign: s.toUpperCase() };
+}
+
+/// Naval contact detail: the same contact the ocean map holds, with its
+/// position, course and speed, and a link across to that map.
+function selectSurface(id) {
+  const c = (state.surface || []).find((x) => x.id === id);
+  if (!c) return;
+  state.selectedSurface = id;
+  const drawer = document.getElementById('drawer');
+  drawer.classList.remove('hidden');
+  const rows = [
+    ['AIS name', c.name || '—'],
+    ['MMSI', c.mmsi ? String(c.mmsi) : '—'],
+    ['class', c.carrier ? 'aircraft carrier' : c.naval ? 'naval / warship' : c.classification || '—'],
+    ['position', `${num(c.lat, 5)}, ${num(c.lon, 5)}`],
+    ['course / speed', `${c.cog != null ? Math.round(c.cog) + '°' : '—'} / ${c.sog != null ? c.sog.toFixed(1) + ' kt' : '—'}`],
+    ['last AIS heard', ageStr(c.age_s) + ' ago'],
+    ['source', 'OceanSentinel AIS picture (same store as the sea map)'],
+  ];
+  document.getElementById('drawer-body').innerHTML = `
+    <h2 class="vname">${esc(c.name || 'Naval contact')}</h2>
+    <div class="vsub">${esc(c.id)}</div>
+    <div class="badges">
+      ${c.carrier ? '<span class="vbadge warn">AIRCRAFT CARRIER</span>' : '<span class="vbadge warn">NAVAL / WARSHIP</span>'}
+      <span class="vbadge ok">SURFACE PICTURE</span>
+    </div>
+    <table class="kv">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
+    <p class="hint">A carrier shows here only while it transmits AIS — carriers routinely go dark at sea, so an empty
+      list is not evidence of absence.</p>
+    <div style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn" id="s-center">CENTER</button>
+      <a class="btn ghost" style="text-decoration:none" href="/?select=${encodeURIComponent(c.id)}" title="Open the maritime map on this contact">OCEAN MAP ↗</a>
+    </div>`;
+  document.getElementById('s-center').addEventListener('click', () => {
+    map.easeTo({ center: [c.lon, c.lat], zoom: Math.max(map.getZoom(), 7) });
+  });
 }
 
 async function addWatch(body, label) {
