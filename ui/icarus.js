@@ -918,13 +918,13 @@ function connect() {
   state.ws = ws;
   ws.onopen = () => {
     state.wsOk = true;
-    chip('chip-ws', 'WS LIVE', 'ok');
+    chip('chip-ws', t('chip.ws.live'), 'ok');
     sendViewport(ws);
     pageProgress(0.25);
   };
   ws.onclose = () => {
     state.wsOk = false;
-    chip('chip-ws', 'WS DOWN', 'bad');
+    chip('chip-ws', t('chip.ws.down'), 'bad');
     const pp = document.getElementById('page-progress');
     if (pp) {
       pp.classList.remove('hidden');
@@ -1017,19 +1017,22 @@ function renderChips() {
   const f = feeds[0];
   if (f && f.state === 'throttled') {
     // not an outage: the client is staying inside the feed's request budget
-    chip('chip-feed', 'RATE LIMITED · RESTING', 'warn', f.detail || '');
+    chip('chip-feed', t('chip.feed.throttled'), 'warn', f.detail || '');
   } else if (f && f.state === 'error') {
     chip('chip-feed', `${String(f.name).toUpperCase()} ERROR`, 'bad', f.detail || '');
   } else if (f && f.state === 'ok') {
-    chip('chip-feed', `${String(f.name).toUpperCase()} LIVE`, 'ok', f.detail || '');
+    chip('chip-feed', `${String(f.name).toUpperCase()} ${t('chip.feed.live')}`, 'ok', f.detail || '');
   } else {
-    chip('chip-feed', 'FEED WAITING', 'warn', (f && f.detail) || '');
+    chip('chip-feed', t('chip.feed.waiting'), 'warn', (f && f.detail) || '');
   }
 
-  const mode = app.mode === 'global' ? 'GLOBAL VIEW · MIL SWEEP' : `REGIONAL · ${app.circles || 0} CIRCLES`;
+  const mode =
+    app.mode === 'global'
+      ? t('chip.mode.global')
+      : `${t('chip.mode.regional')} · ${app.circles || 0}`;
   chip(
     'chip-mode',
-    app.degraded ? mode + ' · COARSE' : mode,
+    app.degraded ? mode + ' · ' + t('chip.mode.coarse') : mode,
     app.mode === 'global' ? 'warn' : 'ok',
     app.mode === 'global'
       ? 'Zoomed out: the regional receiver query cannot cover this view, so the worldwide military sweep carries it. Zoom in for all civil traffic.'
@@ -1058,19 +1061,19 @@ function renderFeedDetail() {
 }
 
 const filterDefs = [
-  ['all', 'ALL'],
-  ['airborne', 'AIRBORNE'],
-  ['ground', 'GROUND'],
-  ['emergency', 'EMERGENCY'],
-  ['military', 'MILITARY'],
-  ['watchlist', 'WATCHED'],
-  ['lost', 'LOST CONTACT'],
+  ['all', 'filter.all'],
+  ['airborne', 'filter.airborne'],
+  ['ground', 'filter.ground'],
+  ['emergency', 'filter.emergency'],
+  ['military', 'filter.military'],
+  ['watchlist', 'filter.watchlist'],
+  ['lost', 'filter.lost'],
 ];
 
 function renderFilters() {
   const row = document.getElementById('air-filters');
   row.innerHTML = filterDefs
-    .map(([k, label]) => `<span class="fchip${state.listFilter === k ? ' on' : ''}" data-f="${k}">${label}</span>`)
+    .map(([k, key]) => `<span class="fchip${state.listFilter === k ? ' on' : ''}" data-f="${k}">${t(key)}</span>`)
     .join('');
   row.querySelectorAll('.fchip').forEach((el) =>
     el.addEventListener('click', () => {
@@ -1114,15 +1117,15 @@ function renderList(force) {
   const html = shown.map((a) => {
     const flags = [];
     if (isEmergency(a)) flags.push(`<em class="tag emergency">${esc((a.emergency || 'EMERG').toUpperCase())}</em>`);
-    if (hasFlag(a, 'watchlist')) flags.push('<em class="tag watchlist">WATCH</em>');
-    if (hasFlag(a, 'military')) flags.push('<em class="tag military">MIL</em>');
-    if (hasFlag(a, 'lost')) flags.push('<em class="tag lost">LOST</em>');
+    if (hasFlag(a, 'watchlist')) flags.push(`<em class="tag watchlist">${t('badge.watch')}</em>`);
+    if (hasFlag(a, 'military')) flags.push(`<em class="tag military">${t('badge.mil')}</em>`);
+    if (hasFlag(a, 'lost')) flags.push(`<em class="tag lost">${t('badge.lost')}</em>`);
     const sub = [a.airline, a.operator, a.type_code, a.registration, a.country]
       .filter(Boolean)
       .slice(0, 3)
       .map(esc)
       .join(' · ');
-    const alt = a.on_ground ? 'GND' : flightLevel(a.alt_ft);
+    const alt = a.on_ground ? t('ground.short') : flightLevel(a.alt_ft);
     const spd = a.gs_kt === null || a.gs_kt === undefined ? '—' : `${Math.round(a.gs_kt)}kt`;
     return `<div class="arow${state.selected === a.hex ? ' sel' : ''}" data-id="${esc(a.hex)}">
       <span class="dot" style="background:${BAND[bandOf(a)]}"></span>
@@ -1140,7 +1143,8 @@ function renderList(force) {
 
   const hiddenNote = state.hidden ? ` (${state.hidden} outside view)` : '';
   const capped = rows.length > cap ? ` · showing ${cap}` : '';
-  document.getElementById('ac-count').textContent = `${rows.length} of ${total} tracked${capped}${hiddenNote}`;
+  document.getElementById('ac-count').textContent =
+    t('count.aircraft.capped', { shown: rows.length, total }) + capped + hiddenNote;
 }
 
 function renderAlerts() {
@@ -1156,7 +1160,7 @@ function renderAlerts() {
         <span class="alert-time">${new Date(a.ts).toISOString().slice(11, 19)}Z</span>
       </div>`
     )
-    .join('') || '<p class="hint" style="padding:10px">No air alerts yet. Emergency squawks, watched aircraft and lost contacts raise one.</p>';
+    .join('') || `<p class="hint" style="padding:10px">${t('alerts.empty.air')}</p>`;
   list.querySelectorAll('.row').forEach((el) =>
     el.addEventListener('click', () => el.dataset.id && selectAircraft(el.dataset.id))
   );
@@ -1165,7 +1169,7 @@ function renderAlerts() {
 function renderWatch() {
   const list = document.getElementById('watch-list');
   const items = state.watchlist || [];
-  document.getElementById('watch-count').textContent = `${items.length} watched`;
+  document.getElementById('watch-count').textContent = t('count.watched', { n: items.length });
   list.innerHTML = items
     .map((w) => {
       const what = w.hex ? w.hex.toUpperCase() : w.callsign ? w.callsign : w.registration || '—';
@@ -1181,7 +1185,7 @@ function renderWatch() {
         <span class="zx" data-id="${esc(w.id)}" title="remove">✕</span>
       </div>`;
     })
-    .join('') || '<p class="hint">Nothing watched yet.</p>';
+    .join('') || `<p class="hint">${t('watch.none')}</p>`;
   list.querySelectorAll('.zx').forEach((el) =>
     el.addEventListener('click', () => deleteWatch(el.dataset.id))
   );
@@ -1193,7 +1197,13 @@ function renderFeeds() {
     .map((f) => {
       const state_ = f.state === 'ok' ? 'ok' : f.state === 'error' ? 'bad' : 'warn';
       const label =
-        f.state === 'ok' ? 'LIVE' : f.state === 'error' ? 'ERROR' : f.state === 'throttled' ? 'THROTTLED' : 'WAIT';
+        f.state === 'ok'
+        ? t('state.live')
+        : f.state === 'error'
+          ? t('state.error')
+          : f.state === 'throttled'
+            ? t('state.throttled')
+            : t('state.wait');
       return `<span class="feed" title="${esc(f.detail || '')}">
         <span class="fstate ${state_}">●</span> ${esc(f.name)} <span class="mini">${label} · ${f.lines || 0} req</span>
       </span>`;
@@ -1204,13 +1214,13 @@ function renderFeeds() {
 function renderStats() {
   const s = state.stats || {};
   document.getElementById('stats').innerHTML = [
-    `<span><b>${s.aircraft || 0}</b> aircraft</span>`,
-    `<span><b>${s.airborne || 0}</b> airborne</span>`,
-    `<span><b>${s.military || 0}</b> military</span>`,
-    `<span class="${s.emergency ? 'bad' : ''}"><b>${s.emergency || 0}</b> emergency</span>`,
-    `<span><b>${s.lost || 0}</b> lost contact</span>`,
-    `<span><b>${s.watchlist || 0}</b> watched</span>`,
-    `<span><b>${s.carriers || 0}</b> carriers</span>`,
+    `<span><b>${s.aircraft || 0}</b> ${t('stat.aircraft')}</span>`,
+    `<span><b>${s.airborne || 0}</b> ${t('stat.airborne')}</span>`,
+    `<span><b>${s.military || 0}</b> ${t('stat.military')}</span>`,
+    `<span class="${s.emergency ? 'bad' : ''}"><b>${s.emergency || 0}</b> ${t('stat.emergency')}</span>`,
+    `<span><b>${s.lost || 0}</b> ${t('stat.lost')}</span>`,
+    `<span><b>${s.watchlist || 0}</b> ${t('stat.watched')}</span>`,
+    `<span><b>${s.carriers || 0}</b> ${t('stat.carriers')}</span>`,
     `<span><b>${s.alerts || 0}</b> alerts</span>`,
   ].join('');
 }
@@ -1305,22 +1315,22 @@ function renderDrawer() {
     ${tape}
     <div class="badges">
       ${watchBtn}
-      <button class="btn ghost" id="d-center">CENTER</button>
-      <button class="btn ghost" id="d-copy">COPY HEX</button>
+      <button class="btn ghost" id="d-center">${t('btn.center')}</button>
+      <button class="btn ghost" id="d-copy">${t('btn.copyhex')}</button>
     </div>
-    <div class="sec-title">STATE VECTOR</div>
+    <div class="sec-title">${t('drawer.statevector')}</div>
     <table class="kv">${rows
       .map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v}</td></tr>`)
       .join('')}</table>
-    <div class="sec-title">AIRFRAME RECORD</div>
-    <div id="d-record" class="hint">Loading the network's airframe record…</div>
+    <div class="sec-title">${t('drawer.airframe')}</div>
+    <div id="d-record" class="hint">${t('drawer.airframe.loading')}</div>
   `;
 
   document.getElementById('d-watch').addEventListener('click', () => addWatch({ hex: a.hex }, 'watching ' + labelOf(a)));
   document.getElementById('d-center').addEventListener('click', () => centerOn(a.hex));
   document.getElementById('d-copy').addEventListener('click', () => {
     navigator.clipboard?.writeText(a.hex.toUpperCase());
-    banner(`Copied ${a.hex.toUpperCase()}`, '');
+    banner(t('banner.copied', { what: a.hex.toUpperCase() }), '');
   });
   loadRecord(a.hex);
 }
@@ -1342,7 +1352,7 @@ async function loadRecord(hex) {
     if (!el.isConnected || state.selected !== hex) return;
     const ac = (j.detail && j.detail.ac && j.detail.ac[0]) || null;
     if (!ac) {
-      el.textContent = 'The network has no extra record for this airframe (common for military and privately-registered aircraft).';
+      el.textContent = t('drawer.airframe.none');
       return;
     }
     const picks = [
@@ -1359,7 +1369,7 @@ async function loadRecord(hex) {
           .join('')}</table>`
       : 'Only the state vector above is known for this airframe.';
   } catch (e) {
-    if (el.isConnected) el.textContent = 'Airframe record unavailable.';
+    if (el.isConnected) el.textContent = t('drawer.airframe.fail');
   }
 }
 
@@ -1394,20 +1404,19 @@ function selectSurface(id) {
     ['position', `${num(c.lat, 5)}, ${num(c.lon, 5)}`],
     ['course / speed', `${c.cog != null ? Math.round(c.cog) + '°' : '—'} / ${c.sog != null ? c.sog.toFixed(1) + ' kt' : '—'}`],
     ['last AIS heard', ageStr(c.age_s) + ' ago'],
-    ['source', 'OceanSentinel AIS picture (same store as the sea map)'],
+    ['source', t('surface.source')],
   ];
   document.getElementById('drawer-body').innerHTML = `
     <h2 class="vname">${esc(c.name || 'Naval contact')}</h2>
     <div class="vsub">${esc(c.id)}</div>
     <div class="badges">
-      ${c.carrier ? '<span class="vbadge warn">AIRCRAFT CARRIER</span>' : '<span class="vbadge warn">NAVAL / WARSHIP</span>'}
-      <span class="vbadge ok">SURFACE PICTURE</span>
+      ${c.carrier ? `<span class="vbadge warn">${t('badge.carrier.long')}</span>` : `<span class="vbadge warn">${t('badge.naval.long')}</span>`}
+      <span class="vbadge ok">${t('badge.surface')}</span>
     </div>
     <table class="kv">${rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table>
-    <p class="hint">A carrier shows here only while it transmits AIS — carriers routinely go dark at sea, so an empty
-      list is not evidence of absence.</p>
+    <p class="hint">${t('surface.hint')}</p>
     <div style="display:flex;gap:6px;flex-wrap:wrap">
-      <button class="btn" id="s-center">CENTER</button>
+      <button class="btn" id="s-center">${t('btn.center')}</button>
       <a class="btn ghost" style="text-decoration:none" href="/?select=${encodeURIComponent(c.id)}" title="Open the maritime map on this contact">OCEAN MAP ↗</a>
     </div>`;
   document.getElementById('s-center').addEventListener('click', () => {
@@ -1672,6 +1681,22 @@ function runBoot() {
     }
   }, tickMs);
 }
+
+// Interface language: an explicit choice if one was made, else the browser's.
+OSi18n.init();
+window.addEventListener('os:lang', (e) => {
+  renderFilters();
+  renderChips();
+  renderFeeds();
+  renderStats();
+  renderList(true);
+  renderAlerts();
+  renderWatch();
+  renderFeedDetail();
+  applyLayerVisibility();
+  if (state.selected) renderDrawer();
+  banner(t('banner.lang', { name: e.detail.name }), '');
+});
 
 runBoot();
 

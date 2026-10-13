@@ -332,6 +332,40 @@ Both maps surface the contacts that normally hide in the noise:
 A carrier appears only while it transmits AIS; carriers routinely go dark at sea,
 so an empty list is not evidence of absence.
 
+## Interface languages
+
+Both maps carry a language selector in the top bar, with **English, Español,
+Français, Deutsch, Português, Italiano, Русский, Türkçe, 中文, 日本語, हिन्दी and
+العربية** (Arabic switches the layout to right-to-left). The choice is
+remembered per browser, and on a first visit the browser's own preference is
+used if it is one of the twelve.
+
+What is translated: the interface — tabs, filters, sort options, buttons, panel
+titles, layer names, legends, status bar, list badges, the detail drawer's
+section titles and buttons, and the empty states.
+
+What is deliberately not translated: **server-generated alert sentences**
+(translating an operator alert badly is worse than leaving it in the language it
+was written in), the long explanatory hint paragraphs, and the boot sequence
+lines. The technical identifiers that are the same everywhere (ADS-B, AIS, MMSI,
+ICAO, UTC, LiDAR, GFW, SAR) stay as they are in every language.
+
+Adding a language is one file:
+
+```js
+// ui/lang/it.js  — loaded automatically, listed in the selector automatically
+window.OSi18n.add('it', {
+  name: 'Italiano',
+  dir: 'ltr',                 // 'rtl' flips the layout
+  strings: { 'tab.tracks': 'NAVI', /* … */ },
+});
+```
+
+Anything a pack omits falls back to English, so a new language can start small
+and be filled in over time. `ui/i18n.js` holds the English source strings; the
+console reports any `[data-i18n]` placed on a container (which would be
+overwritten) so tag mistakes surface immediately.
+
 ## Day / night and time zones
 
 Both maps carry a solar day/night overlay, drawn like an eclipse chart: the

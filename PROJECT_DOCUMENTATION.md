@@ -319,7 +319,29 @@ store the sea map uses, so a carrier shows in both places with one position,
 each carrier ringed by its approximate 50 nm air-control area. The two maps link
 to each other on the same contact (`/?select=<id>` and `/icarus?surface=<id>`).
 
-### 7.3 Day / night and time zones (both maps)
+### 7.3 Interface languages (both maps)
+
+`ui/i18n.js` (engine + English source strings) plus `ui/lang/<code>.js` (one file
+per language). Twelve languages ship: English, Spanish, French, German,
+Portuguese, Italian, Russian, Turkish, Chinese, Japanese, Hindi and Arabic —
+the last with full RTL layout (sidebar, drawer, legend and readouts mirrored via
+`[dir='rtl']` rules in `style.css`).
+
+* a selector in the top bar of both maps, listing each language in its own name;
+* the choice persists per browser (`localStorage`), and a first visit follows the
+  browser's preference when it matches a pack;
+* static markup carries `data-i18n` (plus `-title`, `-placeholder`, `-aria`
+  variants) and is re-rendered on every change; runtime text goes through
+  `t(key)`. Switching language re-renders the live panels too — chips, list
+  rows, stats, alerts, legend and drawer — and reports the change in the banner.
+
+Coverage: every key the pages use is translated in all eleven packs (192 of 217
+keys each; the remainder are English-only variants). Not translated *by design*:
+server-generated alert sentences, the long hint paragraphs, and the boot lines —
+content rather than interface. Missing keys fall back to English, so a new
+language can be introduced incrementally without ever rendering a blank.
+
+### 7.4 Day / night and time zones (both maps)
 
 `ui/daylight.js` draws the solar terminator the way a solar-eclipse chart does —
 a shaded night side with soft twilight bands — plus the sun's own position and

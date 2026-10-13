@@ -1062,7 +1062,7 @@ function renderChips() {
   const app = state.app || {};
   chip('ver', '');
   document.getElementById('ver').textContent = app.version ? 'v' + app.version : '';
-  chip('chip-mode', app.simulation ? 'SIM + LIVE FEEDS' : 'LIVE FEEDS', app.simulation ? 'warn' : 'ok');
+  chip('chip-mode', app.simulation ? t('chip.mode.sim') : t('chip.mode.live'), app.simulation ? 'warn' : 'ok');
   const gfwTip =
     'Global Fishing Watch enrichment is optional. It adds registry identity, fishing effort, AIS-gap history and IUU-list status. ' +
     'Get a free non-commercial token at globalfishingwatch.org/our-apis/tokens and put GFW_API_TOKEN in a .env file next to the app, then restart.';
@@ -1122,19 +1122,21 @@ function renderTrackList(force) {
   const CAP = 400;
   const shown = rows.slice(0, CAP);
   document.getElementById('track-count').textContent =
-    total > CAP ? `${shown.length} of ${total} tracks` : `${total} tracks`;
+    total > CAP
+      ? t('count.tracks.capped', { shown: shown.length, total })
+      : t('count.tracks', { n: total });
   list.innerHTML = shown
     .map((t) => {
       const s = styleOf(t);
       const sel = state.selected === t.id ? ' sel' : '';
       const bits = [];
-      if (t.carrier) bits.push('★ CARRIER');
-      else if (t.naval) bits.push('NAVAL');
-      if (t.dark) bits.push('DARK');
+      if (t.carrier) bits.push(t('badge.carrier'));
+      else if (t.naval) bits.push(t('badge.naval'));
+      if (t.dark) bits.push(t('badge.dark'));
       const motion = [];
       if (t.sog !== null && t.sog !== undefined) motion.push(num(t.sog, 1) + 'kn');
       if (t.cog !== null && t.cog !== undefined) motion.push(Math.round(t.cog) + '°');
-      if (motion.length === 0) motion.push(t.dark ? 'sensor only' : 'static only');
+      if (motion.length === 0) motion.push(t.dark ? t('badge.sensor.only') : t('badge.static.only'));
       bits.push(...motion, ageStr(t.last_seen));
       const meta = bits.join(' · ');
       return `<div class="row${sel}" data-id="${esc(t.id)}">
@@ -1321,17 +1323,21 @@ function renderFeeds() {
 
 function renderStats() {
   const s = state.stats || {};
+  const outOfView = state.hiddenTracks
+    ? ` (+${state.hiddenTracks} ${t('stat.out.of.view')})`
+    : '';
   document.getElementById('stats').innerHTML = [
-    `TRACKS <b>${s.tracks ?? 0}</b>${state.hiddenTracks ? ` (+${state.hiddenTracks} out of view)` : ''}`,
-    `WATCH <b>${s.watchlist ?? 0}</b>`,
-    `AIS <b>${s.ais ?? 0}</b>`,
-    `DARK <b style="color:#ef4444">${s.dark ?? 0}</b>`,
-    `SENSOR <b>${s.sensor_tracked ?? 0}</b>`,
-    `CORROBORATED <b>${s.corroborated ?? 0}</b>`,
-    `ALERTS <b>${s.alerts ?? 0}</b>`,
-    `UPTIME <b>${Math.round((s.uptime_s ?? 0) / 60)}m</b>`,
+    `${t('stat.tracks')} <b>${s.tracks ?? 0}</b>${outOfView}`,
+    `${t('stat.watched')} <b>${s.watchlist ?? 0}</b>`,
+    `${t('stat.ais')} <b>${s.ais ?? 0}</b>`,
+    `${t('stat.dark')} <b style="color:#ef4444">${s.dark ?? 0}</b>`,
+    `${t('stat.sensor')} <b>${s.sensor_tracked ?? 0}</b>`,
+    `${t('stat.corroborated')} <b>${s.corroborated ?? 0}</b>`,
+    `${t('stat.alerts')} <b>${s.alerts ?? 0}</b>`,
+    `${t('stat.uptime')} <b>${Math.round((s.uptime_s ?? 0) / 60)}m</b>`,
   ].join('');
 }
+
 
 /* --------------------------------------------------------------- drawer */
 
@@ -1961,6 +1967,20 @@ function runBoot() {
     }
   }, tickMs);
 }
+
+// Interface language: an explicit choice if one was made, else the browser's.
+OSi18n.init();
+window.addEventListener('os:lang', (e) => {
+  renderChips();
+  renderFeeds();
+  renderStats();
+  renderTrackList(true);
+  renderAlerts();
+  renderWatchlist();
+  applyLayerVisibility();
+  if (state.selected || state.standalone) renderDrawer();
+  banner(t('banner.lang', { name: e.detail.name }), '');
+});
 
 runBoot();
 

@@ -116,6 +116,18 @@ delivery pipeline; the stores, channels, watchlists and UI pages are separate.
 * **`airplanes.live` serves the same v2 schema but returns HTTP 403** to
   unregistered clients ("contact us at contact@airplanes.live"). Do not switch
   the default to it.
+* **Interface languages live in `ui/i18n.js` + one file per language in
+  `ui/lang/`.** English is the source *and* the fallback: `t(key, vars)` returns
+  the English string for any key a pack omits, so an incomplete language still
+  renders. Two rules that broke things when ignored: (1) a `[data-i18n]` target
+  must be a **leaf** — `apply()` assigns `textContent`, so tagging a container
+  deletes its children (that is how the ALERTS tab lost its badge); text sitting
+  next to markup gets its own `<span>` instead. (2) The attribute must land on
+  the element that *owns* the text: for `<label><input/> TEXT</label>` that is
+  the label, not the void input, and never a closing tag (`</i data-i18n=…>` is
+  invalid and renders as visible text). `apply()` warns in the console if it
+  meets a container, and the tagger in the git history was replaced by hand
+  edits after it made both mistakes.
 * **Both maps share one intro sequence — tune them together.** `runBoot()` is
   the same code in `app.js` and `icarus.js` (same tick, easing, message dwell,
   data-gated finish, same 12 s safety net for throttled background tabs), and

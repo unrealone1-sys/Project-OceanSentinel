@@ -643,3 +643,55 @@ pre.json { background: #060b12; border: 1px solid var(--border); border-radius: 
   box-shadow: 0 0 6px #fff;
 }
 #drawer .badges .btn { margin-right: 4px; }
+
+/* ======================================================================
+   Language picker and right-to-left layout.
+   Both maps share this; Arabic is the RTL language in the current set.
+   ====================================================================== */
+
+.langpick {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.langpick .globe { font-size: 13px; opacity: .8; line-height: 1; }
+.langpick select {
+  background: #060c14;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font: 10px var(--mono);
+  padding: 4px 6px;
+  max-width: 148px;
+  cursor: pointer;
+}
+.theme-air .langpick select { border-color: #2a2418; }
+
+/* ---------- right-to-left (Arabic) ---------- */
+[dir='rtl'] #sidebar {
+  border-right: 0;
+  border-left: 1px solid var(--border);
+}
+[dir='rtl'] #legend { left: auto; right: 350px; }
+[dir='rtl'] #replaybar { left: 12px; right: 348px; }
+[dir='rtl'] #cursor-readout { right: auto; left: 12px; }
+[dir='rtl'] #drawer {
+  right: auto;
+  left: 0;
+  border-left: 0;
+  border-right: 1px solid var(--border);
+}
+[dir='rtl'] #drawer.hidden { transform: translateX(-102%); }
+[dir='rtl'] #drawer-close { right: auto; left: 10px; }
+[dir='rtl'] .clock { margin-left: 0; margin-right: auto; }
+[dir='rtl'] #stats { margin-left: 0; margin-right: auto; }
+[dir='rtl'] .row,
+[dir='rtl'] .arow { text-align: right; }
+[dir='rtl'] .arow .ametrics { align-items: flex-start; }
+[dir='rtl'] .row.sel { box-shadow: inset -2px 0 0 var(--cyan); }
+[dir='rtl'] .arow.sel { box-shadow: inset -2px 0 0 var(--amber); }
+[dir='rtl'] input,
+[dir='rtl'] select { text-align: right; }
+[dir='rtl'] .tab { letter-spacing: 0; }
+
